@@ -5,8 +5,8 @@
 **Branch:** `feat/Phase0_Scaffolding`
 **AWS cost incurred by this phase:** $0
 **Companion documents:**
-[design research](./2026-08-04-blue-green-deployment-platform-design-research.md) ·
-[phase roadmap](./2026-08-04-implementation-phase-roadmap.md)
+[design research](../../2026-08-04-blue-green-deployment-platform-design-research.md) ·
+[phase roadmap](../../2026-08-04-implementation-phase-roadmap.md)
 
 ---
 
@@ -420,7 +420,7 @@ Only three targets are real, per the "only what works today" decision. The `# PL
 
 ## 6. Task group E — The written record
 
-### E1 — `docs/2026-08-04-phase-00-verification-findings.md`
+### E1 — `docs/phases/phase0/2026-08-04-phase-00-verification-findings.md`
 
 One section per verification task A1–A7, each with: the question, the exact command, the raw output verbatim, the answer, and the design consequence. Where group B changes something, both before and after states appear.
 
@@ -489,7 +489,7 @@ Commits 3 and 4 are mutually exclusive.
 
 Phase 0 is done when every line below is true and demonstrated:
 
-1. All seven verification questions A1–A7 have a recorded answer with raw command output in `docs/2026-08-04-phase-00-verification-findings.md`.
+1. All seven verification questions A1–A7 have a recorded answer with raw command output in `docs/phases/phase0/2026-08-04-phase-00-verification-findings.md`.
 2. A6 confirms `deployment_configuration` and `lifecycle_hook` exist in the installed provider — or, if not, Phase 0 is halted and the design is reopened.
 3. The local toolchain either meets the design's stated versions, or the design has been amended to match reality. No silent contradiction remains between `docs/` and the machine.
 4. The directory skeleton exists and matches §4 of this plan, every leaf carrying a `.gitkeep` and a README, and the five layer roots (`bootstrap`, `foundation`, `network`, `environments/staging`, `environments/prod`) are each present as a directory of their own.

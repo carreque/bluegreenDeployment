@@ -62,18 +62,22 @@ A note on the pipelines living in `foundation`: the pipelines are created by a l
 
 | Phase | Branch |
 |---|---|
-| 0 | `phase-00-scaffolding` |
-| 1 | `phase-01-application` |
-| 2 | `phase-02-container-build` |
-| 3 | `phase-03-bootstrap-foundation` |
-| 4 | `phase-04-network` |
-| 5 | `phase-05-staging` |
-| 6 | `phase-06-prod-blue-green` |
-| 7 | `phase-07-infra-pipeline` |
-| 8 | `phase-08-app-pipeline` |
-| 9 | `phase-09-observability` |
-| 10 | `phase-10-teardown-rebuild` |
-| 11 | `phase-11-evidence-docs` |
+| 0 | `feat/Phase0_Scaffolding` |
+| 1 | `feat/Phase1_Application` |
+| 2 | `feat/Phase2_ContainerBuild` |
+| 3 | `feat/Phase3_BootstrapFoundation` |
+| 4 | `feat/Phase4_Network` |
+| 5 | `feat/Phase5_Staging` |
+| 6 | `feat/Phase6_ProdBlueGreen` |
+| 7 | `feat/Phase7_InfraPipeline` |
+| 8 | `feat/Phase8_AppPipeline` |
+| 9 | `feat/Phase9_Observability` |
+| 10 | `feat/Phase10_TeardownRebuild` |
+| 11 | `feat/Phase11_EvidenceDocs` |
+
+> Amended in Phase 0. The table originally read `phase-NN-kebab-case`; it was
+> changed to match `feat/Phase0_Scaffolding`, the branch already in flight when
+> this convention was settled.
 
 The cycle for each phase:
 
@@ -163,7 +167,12 @@ First AWS resources. Both applies are local — the pipelines that will later ma
 
 - **bootstrap:** S3 state bucket with versioning, encryption, public access blocked, and `use_lockfile = true`. No DynamoDB lock table. Local state, gitignored, documented as trivially recreatable.
 - **foundation:** hosted zone via find-or-create; ACM certificate for `api.carloscloudengineer.com` and `staging-api.carloscloudengineer.com` behind the `wait_for_validation` flag; ECR repositories with immutable tags, scan-on-push and a lifecycle policy; versioned artifact bucket with lifecycle rules; SNS topic with email subscription to `carreque45@gmail.com`; shared IAM roles.
-- **CodeConnections:** created by Terraform in `PENDING` state, then authorised by one manual click in the console. This is the only irreducibly manual step in the whole project and the runbook says so plainly.
+- **CodeConnections:** created by Terraform in `PENDING` state, then authorised by one manual click in the console.
+- **Cost allocation tags:** activate `environment`, `projectName`, `region` and `owner` under Billing → Cost allocation tags.
+
+These are the **two irreducibly manual steps in the whole project**, and the Phase 3 runbook says so plainly rather than burying them in a list.
+
+The second has a deadline the first does not. Tag activation is **not retroactive**: a key only becomes activatable once AWS has observed it on a real resource — so it cannot be done before this phase — and any cost recorded before activation stays permanently unattributed. Doing it late does not delay anything; it silently loses data. See [the naming and tagging convention](./naming-and-tagging-convention.md#6-when-the-tags-actually-take-effect).
 - **Seed ECR** with the real image from Phase 2, so the ECS services in Phases 5 and 6 have something to run.
 
 **Exit criteria:** state backend live and locking; certificate issued and validated; ECR holds the seeded image; the SNS email subscription is confirmed.

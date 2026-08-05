@@ -1,0 +1,50 @@
+# https://editorconfig.org
+# Keeps formatting identical across editors so diffs show intent, not whitespace.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Terraform. `terraform fmt` emits two-space indentation and will fight any
+# other setting, so this matches the formatter rather than competing with it.
+[*.{tf,tfvars,hcl}]
+indent_size = 2
+
+# Python. Matches ruff's defaults, so the formatter and the editor agree.
+[*.py]
+indent_size = 4
+max_line_length = 88
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.json]
+indent_size = 2
+
+[*.sh]
+indent_size = 2
+
+# Make requires literal tabs in recipes and fails with a cryptic
+# "missing separator" error on spaces. macOS ships GNU Make 3.81, which has no
+# .RECIPEPREFIX, so tabs are not optional here.
+[[Mm]akefile]
+indent_style = tab
+
+[Dockerfile*]
+indent_size = 2
+
+# Two trailing spaces in Markdown are a hard line break. Trimming them silently
+# changes how a document renders, so trimming is disabled rather than risking
+# reflowed paragraphs in the design and runbook documents.
+[*.md]
+trim_trailing_whitespace = false
+
+# Generated and vendored files — left exactly as their tool writes them.
+[.terraform.lock.hcl]
+trim_trailing_whitespace = false
+insert_final_newline = false
