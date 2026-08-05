@@ -1,0 +1,10 @@
+# Every change requires review from the repository owner.
+#
+# Syntax is <path-pattern> <owner>, and owners must be prefixed with @.
+# A bare username is parsed as a file pattern with no owner, which silently
+# assigns no reviewer at all — the rule appears to exist but does nothing.
+#
+# This encodes roadmap §2's rule that merging is always the owner's action,
+# making it a repository setting rather than a convention to remember.
+
+* @carreque

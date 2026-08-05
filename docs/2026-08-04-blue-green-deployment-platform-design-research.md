@@ -75,9 +75,34 @@ Combined with a **separate ALB test listener**, this enables a **dark canary**: 
 
 ### 1.4 Terraform supports the native path
 
-`aws_ecs_service` gained `deployment_configuration { strategy = "BLUE_GREEN" }` plus `lifecycle_hook` blocks (with `hookTargetArn`, `roleArn`, `lifecycleStages`) in **AWS provider 6.4.0**, released 2025-07-17. Blue/green also requires `load_balancer.advanced_configuration`.
+`aws_ecs_service` gained `deployment_configuration { strategy = "BLUE_GREEN" }` and lifecycle hooks in **AWS provider 6.4.0**, released 2025-07-17. Blue/green also requires `load_balancer.advanced_configuration`.
 
 **Consequence:** pin the provider to `>= 6.4`. Local Terraform 1.15.7 is fine.
+
+> **Amended in Phase 0 (2026-08-04).** The paragraph above originally described
+> `lifecycle_hook` as a block alongside `deployment_configuration`, with camelCase
+> attributes taken from the changelog. Inspecting the installed provider's schema
+> (6.57.1) shows both are wrong. `lifecycle_hook` nests **inside**
+> `deployment_configuration`, and attributes are snake_case:
+>
+> ```hcl
+> deployment_configuration {
+>   strategy             = "BLUE_GREEN"
+>   bake_time_in_minutes = "5"        # string, not number
+>
+>   lifecycle_hook {
+>     hook_target_arn  = "..."        # required
+>     role_arn         = "..."        # required
+>     lifecycle_stages = ["..."]      # required, list(string)
+>     hook_details     = "..."        # optional
+>   }
+> }
+> ```
+>
+> `canary_configuration` and `linear_configuration` are also present, confirming
+> the October 2025 traffic-shifting strategies of §1.2 exist in the provider and
+> not only in release notes. Full schema output in
+> [the Phase 0 findings](./phases/phase0/2026-08-04-phase-00-verification-findings.md#a6--does-aws_ecs_service-expose-deployment_configuration-and-lifecycle_hook).
 
 ### 1.5 CodePipeline can trigger native blue/green directly
 
@@ -135,17 +160,32 @@ The S3 backend supports native lockfile-based locking (`use_lockfile = true`) as
 
 ## 2. Environment audit
 
+Re-audited on the target machine in Phase 0. The table below is the verified state;
+see the note underneath for what changed and why.
+
 | Tool | Version | Notes |
 |---|---|---|
-| aws-cli | 2.15.19 | region `us-east-1`; profiles `default`, `bootcamp-administrator-access` |
-| docker | 29.4.3 | |
-| terraform | 1.15.7 | supports `use_lockfile` |
-| node | 24.18.0 | |
-| python | 3.14.6 | matches target container |
-| git | 2.39.1.windows.1 | |
+| aws-cli | 2.35.4 | region `us-east-1`; profile `bootcamp-administrator-access` |
+| docker | 28.3.2 | |
+| terraform | 1.15.7 | supports `use_lockfile`; pinned in `.terraform-version` |
+| python | 3.14.6 | matches target container; pinned in `.python-version` |
+| git | 2.50.1 (Apple Git-155) | |
+| make | 3.81 | macOS's GPLv2 build — no `.ONESHELL` or `.RECIPEPREFIX` |
+| jq | 1.7.1 | required for provider schema inspection |
 | sam / cdk | not installed | not required |
 
-**Action required before any deployment:** the SSO token is expired. Run `aws sso login --profile bootcamp-administrator-access`.
+**Action required before any deployment:** SSO tokens expire. Run `aws sso login --profile bootcamp-administrator-access`, or `make verify-aws`, which reports the session state and prints that command when it has lapsed.
+
+> **Amended in Phase 0 (2026-08-04).** The original table was captured on a
+> different machine — the `git 2.39.1.windows.1` entry gives it away — and
+> disagreed with the target machine on every row. Two decisions rested on it:
+> §1.8's "no DynamoDB lock table" needs Terraform ≥ 1.10 (1.5.7 was installed),
+> and §1.6's local-matches-container argument needs Python 3.14 (3.12.3 was
+> resolving). Both were remediated rather than amended around, so §1.6 and §1.8
+> stand as written. `node` is dropped from the table: no part of this project
+> uses it.
+
+
 
 ---
 
@@ -233,6 +273,13 @@ Single account, `us-east-1`, one VPC across 2 AZs.
 
 **The production ALB has two listeners:** `:443` production and `:8443` **test**. The test listener is what makes dark canary possible.
 
+> **Amended in Phase 0 (2026-08-04).** Two listeners are necessary but not
+> sufficient. The provider's `load_balancer.advanced_configuration` requires
+> `production_listener_rule` — a **listener rule** ARN, not a listener ARN — so
+> each listener also needs an `aws_lb_listener_rule`, and a default listener
+> action will not do. `test_listener_rule` is optional in the schema but is what
+> the dark canary depends on, so it is mandatory in this design.
+
 ---
 
 ## 6. Pipelines
@@ -293,7 +340,13 @@ Surfaced on a single CloudWatch dashboard. SNS → email notifications on pipeli
 
 ### 8.1 IAM
 
-Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task execution, ECS task, and lifecycle Lambda each get their own role rather than sharing a permissive one.
+Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task execution, ECS task, lifecycle Lambda, and the **ECS blue/green controller** each get their own role rather than sharing a permissive one.
+
+> **Amended in Phase 0 (2026-08-04).** The sixth role was missing from the
+> original list of five. `load_balancer.advanced_configuration.role_arn` is a
+> **required** attribute — it is the role the ECS deployment controller assumes to
+> rewrite ALB listener rules during a traffic shift. Without it the production
+> service cannot be created at all.
 
 ---
 
@@ -332,7 +385,10 @@ Single GitHub monorepo:
 | Risk | Status |
 |---|---|
 | **Single NAT Gateway** — one AZ is a SPOF for egress | Deliberate cost trade-off, documented |
-| **ACM validation hangs** on the zone-create path until NS delegation | Handled via `wait_for_validation` flag and a documented two-phase apply |
+| ~~**ACM validation hangs** on the zone-create path until NS delegation~~ | **Retired in Phase 0.** The hosted zone already exists (`Z01311493LQ7UOIRHM1H9`, created by the Route 53 registrar) and its NS records, the registrar's published set and public DNS all agree. Terraform adopts it, `wait_for_validation` can be `true` on the first apply, and the two-phase apply never occurs. |
+| ~~**Lambda may not offer a Python 3.14 managed runtime**~~ | **Retired in Phase 0.** `python3.14` is offered, and `python3.15` already exists. The hooks and metrics collector pin to 3.14, matching the container and local interpreter exactly. |
+| **Domain expires 2026-12-18 with auto-renew disabled** | Found in Phase 0. Nothing before Phase 5 depends on it; from Phase 5 onward every environment's TLS and DNS does. Expiry would take both environments down and invalidate the captured evidence. Requires a decision: enable auto-renew, or diarise the renewal. |
+| **Blue/green needs listener *rules*, and a sixth IAM role** | Found in Phase 0 by inspecting the provider schema; §5 and §8.1 amended. No workaround needed, but both are required attributes and would have failed at apply time in Phase 6. |
 | **Staging deploys are rolling, not blue/green** | Deliberate — blue/green only on prod keeps cost sane; staging's job is to fail fast |
 | **Deviation from the named service list** — ECS-native instead of CodeDeploy | Justified by AWS's March 2026 guidance; acceptable because this is a portfolio project, not a graded rubric |
 | **CodePipeline ECS action deploys image changes only** | Mitigated by the two-pipeline split (§6) |

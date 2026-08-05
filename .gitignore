@@ -1,0 +1,119 @@
+# ---------------------------------------------------------------------------
+# Terraform
+# ---------------------------------------------------------------------------
+# Provider plugins and module caches — re-downloaded by `terraform init`.
+**/.terraform/
+.terraformrc
+terraform.rc
+
+# State. Remote for every layer except bootstrap, whose local state is
+# deliberate and trivially recreatable (roadmap Phase 3).
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+infra/bootstrap/terraform.tfstate*
+
+# Saved plans. Binary, environment-specific, and may embed resource values.
+*.tfplan
+*.tfplan.*
+plan.out
+plan.json
+
+# Variable files may carry account IDs, ARNs or secrets. The .example
+# counterparts are committed so the required shape stays documented.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!*.tfvars.json.example
+
+# Crash logs may contain full request/response bodies.
+crash.log
+crash.*.log
+
+# Local overrides — by design not shared.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# NOT ignored, deliberately:
+#   .terraform.lock.hcl  — the provider lock file is committed. It is what
+#                          makes provider versions identical across this
+#                          machine and CodeBuild (design §4.1).
+#   .terraform-version   — tfenv pin, committed so the core version is
+#   .python-version        part of the repository rather than the machine.
+
+# ---------------------------------------------------------------------------
+# Credentials and secrets
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/testdata/*.key
+credentials
+.aws/
+*_rsa
+*_ed25519
+
+# ---------------------------------------------------------------------------
+# Python (app/, lambdas)
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.Python
+
+# Test, coverage and lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit*.xml
+
+# ---------------------------------------------------------------------------
+# Build artefacts
+# ---------------------------------------------------------------------------
+# SBOMs and test reports are published to the versioned artifact bucket by
+# the pipeline (design §4.2), not committed.
+sbom*.json
+sbom*.spdx.json
+*.sbom
+.build/
+*.zip
+!lambdas/**/fixtures/*.zip
+
+# ---------------------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Local scratch
+# ---------------------------------------------------------------------------
+tmp/
+scratch/
+*.local
