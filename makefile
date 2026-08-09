@@ -59,6 +59,14 @@ verify-tools: ## Check the local toolchain and version pins
 verify-aws: ## Confirm the AWS session, account and region
 	@./scripts/verify-aws.sh
 
+# ---------------------------------------------------------------------------
+# Phase 1 — application
+#
+# Every recipe calls the virtualenv's interpreter by path. `python3` on PATH is
+# 3.14.6 only when make's parent was a zsh; from CI, a git hook or an editor
+# task it is the system 3.12. See docs/phases/phase1/…-implementation-plan.md §F1.
+# ---------------------------------------------------------------------------
+
 .PHONY: venv
 venv: $(VENV)/bin/python ## Create the virtualenv on the pinned interpreter
 
@@ -73,8 +81,19 @@ deps: $(VENV)/.deps-stamp ## Install hash-pinned dependencies into the virtualen
 deps-compile: venv ## Recompile both requirements locks with hashes
 	@./scripts/compile-deps.sh
 
+.PHONY: local-up
+local-up: ## Start DynamoDB Local
+	@cd $(APP_DIR) && docker compose up -d
+
+.PHONY: local-down
+local-down: ## Stop DynamoDB Local and discard its data
+	@cd $(APP_DIR) && docker compose down -v
+
+# Depends on local-up because the contract suite runs against DynamoDB Local.
+# `docker compose up -d` is idempotent and returns in milliseconds when the
+# container is already running, so this costs nothing on repeat runs.
 .PHONY: test
-test: deps ## Run the application test suite with coverage
+test: deps local-up ## Run the application test suite with coverage
 	@cd $(APP_DIR) && $(PY) -m pytest
 
 .PHONY: lint
@@ -85,8 +104,20 @@ lint: deps ## Ruff lint and format check
 format: deps ## Apply ruff formatting and safe fixes
 	@cd $(APP_DIR) && $(RUFF) check --fix . && $(RUFF) format .
 
-	
-# PLANNED: run-local      docker compose up with DynamoDB Local (Phase 1)
+# PYTHONPATH=src, because the package is deliberately never pip-installed.
+# pytest gets there via `pythonpath = ["src"]` in pyproject.toml, but that
+# setting is pytest's alone — python -m and uvicorn know nothing about it.
+# Phase 2's image sets PYTHONPATH=/app/src for exactly the same reason, so
+# these two recipes run the application the way the container will.
+.PHONY: local-tables
+local-tables: deps local-up ## Create the local DynamoDB tables (idempotent)
+	@cd $(APP_DIR) && PYTHONPATH=src $(PY) -m bgd.cli.create_tables
+
+.PHONY: run-local
+run-local: local-tables ## Run the API against DynamoDB Local
+	@cd $(APP_DIR) && PYTHONPATH=src $(PY) -m uvicorn bgd.api.main:create_app \
+	  --factory --reload --port 8080
+
 # PLANNED: build          Build the container image (Phase 2)
 # PLANNED: sbom           Generate the SBOM with syft (Phase 2)
 # PLANNED: plan-LAYER     terraform plan for one layer (Phase 3)

@@ -1,0 +1,67 @@
+# Pre-merge validation.
+#
+# GitHub's role in this design is source-only: CodeConnections grants
+# CodePipeline read access and a push to main triggers a deployment. This
+# workflow deploys nothing and needs no AWS credentials and no OIDC federation
+# — it lints and tests source, and touches nothing in the account.
+#
+# It exists because pull requests do not trigger the pipelines (roadmap §2.1),
+# only the merge does. Without it the pre-merge gate would be the honour system.
+name: pr-validate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    # The contract suite runs against DynamoDB Local. A service container is
+    # the GitHub-native equivalent of `make local-up`.
+    #
+    # No `command:` override, deliberately — service containers cannot set one,
+    # and this image's default entrypoint is already
+    # `java -jar DynamoDBLocal.jar -inMemory` on port 8000. The compose file
+    # adds -sharedDb for local work so the AWS CLI and the app agree; here every
+    # client is the test suite presenting the same credentials and region, so
+    # there is nothing to share across.
+    services:
+      dynamodb-local:
+        image: amazon/dynamodb-local@sha256:ff89bd48ff32cd8d9be5fee8873b65b8854dc408f1afe881be6eb00247bc0dab
+        ports:
+          - 8000:8000
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          # The repository pin, so CI and this machine cannot disagree.
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Install hash-pinned dependencies
+        run: pip install --require-hashes -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Tests with coverage
+        run: pytest

@@ -1,0 +1,7 @@
+# Runtime dependencies. Compiled to requirements.txt with:
+#   make deps-compile
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+boto3
