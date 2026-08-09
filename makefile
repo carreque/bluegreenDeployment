@@ -18,7 +18,15 @@ SHELL := /usr/bin/env bash
 AWS_PROFILE ?= bootcamp-administrator-access
 AWS_REGION  ?= us-east-1
 AWS_ACCOUNT_ID ?= 590184028094
+APP_DIR := app
+VENV    := $(CURDIR)/$(APP_DIR)/.venv
+PY      := $(VENV)/bin/python
+PIP     := $(VENV)/bin/pip
+RUFF    := $(VENV)/bin/ruff
 export AWS_PROFILE AWS_REGION AWS_ACCOUNT_ID
+
+$(VENV)/bin/python:
+	@./scripts/create-venv.sh
 
 # Every target here is phony — it names an action, not a file it produces.
 # Each declares itself immediately above its own rule rather than in one
@@ -51,8 +59,33 @@ verify-tools: ## Check the local toolchain and version pins
 verify-aws: ## Confirm the AWS session, account and region
 	@./scripts/verify-aws.sh
 
-# PLANNED: test           Run the application test suite (Phase 1)
-# PLANNED: lint           Ruff lint and format check (Phase 1)
+.PHONY: venv
+venv: $(VENV)/bin/python ## Create the virtualenv on the pinned interpreter
+
+$(VENV)/.deps-stamp: $(APP_DIR)/requirements-dev.txt | $(VENV)/bin/python
+	@$(PIP) install --require-hashes --quiet -r $(APP_DIR)/requirements-dev.txt
+	@touch $@
+
+.PHONY: deps
+deps: $(VENV)/.deps-stamp ## Install hash-pinned dependencies into the virtualenv
+
+.PHONY: deps-compile
+deps-compile: venv ## Recompile both requirements locks with hashes
+	@./scripts/compile-deps.sh
+
+.PHONY: test
+test: deps ## Run the application test suite with coverage
+	@cd $(APP_DIR) && $(PY) -m pytest
+
+.PHONY: lint
+lint: deps ## Ruff lint and format check
+	@cd $(APP_DIR) && $(RUFF) check . && $(RUFF) format --check .
+
+.PHONY: format
+format: deps ## Apply ruff formatting and safe fixes
+	@cd $(APP_DIR) && $(RUFF) check --fix . && $(RUFF) format .
+
+	
 # PLANNED: run-local      docker compose up with DynamoDB Local (Phase 1)
 # PLANNED: build          Build the container image (Phase 2)
 # PLANNED: sbom           Generate the SBOM with syft (Phase 2)
