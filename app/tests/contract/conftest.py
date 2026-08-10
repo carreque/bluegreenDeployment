@@ -52,6 +52,18 @@ def dynamodb_endpoint() -> str:
 
 
 @pytest.fixture
+def dynamodb_client(dynamodb_endpoint: str):
+    """A raw client, for tests asserting on table shape rather than behaviour.
+
+    A fixture rather than an import of `_client` from this module: importing
+    across test modules needs the rootdir on sys.path, which `python -m pytest`
+    adds implicitly and the `pytest` console script does not. CI runs the
+    console script, so such an import passes locally and fails there.
+    """
+    return _client(dynamodb_endpoint)
+
+
+@pytest.fixture
 def dynamodb_tables(dynamodb_endpoint: str):
     """A private pair of tables per test.
 

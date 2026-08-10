@@ -39,7 +39,7 @@ def test_it_refuses_to_run_without_an_endpoint(monkeypatch) -> None:
     assert "Refusing to create tables" in str(caught.value)
 
 
-def test_it_creates_both_tables_and_is_idempotent(local_tables, dynamodb_endpoint, capsys) -> None:
+def test_it_creates_both_tables_and_is_idempotent(local_tables, dynamodb_client, capsys) -> None:
     accounts, transactions = local_tables
 
     main()
@@ -53,9 +53,7 @@ def test_it_creates_both_tables_and_is_idempotent(local_tables, dynamodb_endpoin
     assert f"exists   {accounts}" in second
     assert f"exists   {transactions}" in second
 
-    from tests.contract.conftest import _client
-
-    client = _client(dynamodb_endpoint)
+    client = dynamodb_client
     try:
         described = client.describe_table(TableName=transactions)["Table"]
         indexes = [i["IndexName"] for i in described.get("LocalSecondaryIndexes", [])]
