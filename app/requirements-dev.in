@@ -1,0 +1,22 @@
+# Test and lint dependencies. Includes the runtime set so a single install
+# gives a working test environment, and so test_requirements_lock.py can
+# assert the two resolutions agree.
+#
+# No AWS mocking library. The real backend is exercised against DynamoDB
+# Local, which is a container rather than a package — see §0. Everything
+# above the repository layer runs against the in-memory fake.
+-r requirements.in
+
+pytest
+pytest-cov
+httpx2          # Starlette 1.4 deprecated httpx in the TestClient (F5)
+ruff
+pip-tools
+
+# pip-tools calls pip's private API, and pip 26 changed it in two places that
+# pip-tools 7.6.0 — the newest release — has no fix for. Stated here as well as
+# in scripts/create-venv.sh so the bound is part of the lock rather than only a
+# convention in a shell script: pip-tools pulls pip in as a dependency, so
+# without this line the lock would pin the very version that breaks it. See
+# Phase 1 finding F7.
+pip<26

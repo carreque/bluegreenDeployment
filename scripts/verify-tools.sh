@@ -17,7 +17,7 @@ failures=0
 # name  minimum  why
 TOOLS=(
   "terraform|1.10.0|use_lockfile on the S3 backend (design §1.8)"
-  "python3|3.14.0|parity with the container (design §1.6)"
+  "python3|3.12.0|informational only — make uses app/.venv, see Phase 1 §F1"
   "docker|24.0.0|BuildKit"
   "aws|2.15.0|recorded baseline (design §2)"
   "git|2.39.0|recorded baseline (design §2)"
@@ -99,11 +99,38 @@ check_pin() {
   failures=$((failures + 1))
 }
 
+# check_venv_pin — the authoritative Python check from Phase 1 onward.
+#
+# Phase 0 deliberately checked python3 through PATH, because a PATH resolution
+# difference between shell kinds was the bug it was hunting. That check is kept
+# below, but demoted to a warning: Phase 1 stopped using the ambient
+# interpreter altogether. What must be right now is the virtualenv every make
+# target invokes by absolute path.
+check_venv_pin() {
+  local pinned actual venv="$ROOT/app/.venv/bin/python"
+  pinned="$(tr -d '[:space:]' <"$ROOT/.python-version")"
+
+  if [[ ! -x "$venv" ]]; then
+    printf "$ROW" "app/.venv" "$pinned" "-"
+    mark_warn "not created yet — run 'make venv'"
+    return 0
+  fi
+
+  actual="$(extract_version "$("$venv" --version 2>&1)")"
+  printf "$ROW" "app/.venv" "$pinned" "${actual:-?}"
+  if [[ "$pinned" == "$actual" ]]; then
+    mark_ok
+  else
+    mark_fail "virtualenv is $actual, not $pinned — run 'make venv'"
+    failures=$((failures + 1))
+  fi
+}
+
 echo
 info "Version pins"
 printf "$ROW%s\n" "FILE" "PINNED" "ON PATH" "STATUS"
 check_pin ".terraform-version" terraform tfenv version-name
-check_pin ".python-version" python3 pyenv version
+check_venv_pin
 
 echo
 if ((failures > 0)); then

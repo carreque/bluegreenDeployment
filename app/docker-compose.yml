@@ -1,0 +1,24 @@
+# Local development and test dependencies.
+#
+# Phase 1 runs only DynamoDB Local here; the API runs on the host through
+# uvicorn, because the Dockerfile does not exist until Phase 2, which adds an
+# `api` service to this file.
+#
+# Pinned by digest rather than tag, per design §4.1. Recorded 2026-08-05 —
+# re-record with:
+#   docker pull amazon/dynamodb-local:latest
+#   docker image inspect amazon/dynamodb-local:latest --format '{{index .RepoDigests 0}}'
+name: bgd-local
+
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local@sha256:ff89bd48ff32cd8d9be5fee8873b65b8854dc408f1afe881be6eb00247bc0dab
+    container_name: bgd-dynamodb-local
+    # -sharedDb: one database regardless of which credentials or region the
+    #   caller presents, so the AWS CLI and the application see the same
+    #   tables. Without it DynamoDB Local partitions by access key and region.
+    # -inMemory: nothing survives a restart, which is what makes every test
+    #   run start from a known state.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "8000:8000"

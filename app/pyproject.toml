@@ -1,0 +1,48 @@
+[project]
+name = "bgd-api"
+version = "0.0.0"
+description = "Blue/green deployment platform — accounts and transactions API"
+requires-python = ">=3.14"
+
+# No [build-system]: this package is never pip-installed. Tests reach it via
+# pytest's pythonpath below, and Phase 2's image sets PYTHONPATH=/app/src.
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config --cov --cov-report=term-missing"
+filterwarnings = [
+    "error::DeprecationWarning",
+    # Starlette 1.4 deprecated httpx in the TestClient in favour of httpx2
+    # (F5). We ship httpx2; this keeps any *new* deprecation loud.
+]
+
+[tool.coverage.run]
+source = ["src/bgd"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "^\\s*\\.\\.\\.$",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+# target-version is deliberately omitted: ruff infers it from
+# project.requires-python above, so the Python version is stated once.
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "ASYNC", "S", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101 assert-used: asserts are the point of a test.
+# S105/S106 hardcoded passwords: the AWS neutralisation fixture uses literals.
+"tests/**" = ["S101", "S105", "S106"]
+# T201 print: create_tables is a CLI whose output is the user interface.
+"src/bgd/cli/*" = ["T201"]
