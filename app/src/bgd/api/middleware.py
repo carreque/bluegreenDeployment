@@ -28,6 +28,11 @@ class RequestContextMiddleware:
             return
 
         request_id = Headers(scope=scope).get("x-request-id") or uuid.uuid4().hex
+        # Also on the scope, not only in the ContextVar. The `finally` below
+        # resets the var as an exception propagates *out* of this middleware,
+        # and ServerErrorMiddleware — which builds the 500 — runs one layer
+        # further out, after that reset. The scope outlives both.
+        scope.setdefault("state", {})["request_id"] = request_id
         token = request_id_var.set(request_id)
         started = time.perf_counter()
         status = 500

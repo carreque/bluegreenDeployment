@@ -93,7 +93,21 @@ def test_an_unhandled_exception_becomes_a_500_that_leaks_nothing(client) -> None
     assert response.status_code == 500
     assert response.json()["code"] == "INTERNAL_ERROR"
     assert "secret internal detail" not in response.text
-    assert response.json()["request_id"]
+    # "-" is the ContextVar default and is truthy, so assert against it by
+    # name: a body carrying the sentinel is a body carrying no link at all.
+    assert response.json()["request_id"] != "-"
+
+
+def test_an_unhandled_exception_still_reports_the_caller_s_request_id(client) -> None:
+    """The 500 body is the caller's only copy of the id — there is no
+    x-request-id header on this path, because ServerErrorMiddleware emits the
+    response outside RequestContextMiddleware's send wrapper. That same
+    ordering resets the ContextVar before the handler runs, so the id has to
+    reach it by another route.
+    """
+    response = client.get("/probe/boom", headers={"x-request-id": "known-id-123"})
+    assert response.status_code == 500
+    assert response.json()["request_id"] == "known-id-123"
 
 
 def test_every_domain_error_code_has_a_status(client) -> None:

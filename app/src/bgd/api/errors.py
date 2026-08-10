@@ -89,8 +89,19 @@ def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
         # The detail goes to the log, never to the client. request_id is the
-        # link between the two.
-        logger.exception("unhandled exception", extra={"path": request.url.path})
+        # link between the two — taken from the scope rather than the
+        # ContextVar, which RequestContextMiddleware has already reset by the
+        # time this handler runs (it sits outside that middleware). Without
+        # this the body and the traceback both carry "-" and cannot be joined.
+        request_id = getattr(request.state, "request_id", request_id_var.get())
+        logger.exception(
+            "unhandled exception",
+            extra={"path": request.url.path, "request_id": request_id},
+        )
         return problem_response(
-            500, "INTERNAL_ERROR", "an unexpected error occurred", request.url.path
+            500,
+            "INTERNAL_ERROR",
+            "an unexpected error occurred",
+            request.url.path,
+            request_id=request_id,
         )
