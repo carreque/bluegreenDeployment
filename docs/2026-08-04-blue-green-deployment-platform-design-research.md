@@ -253,6 +253,36 @@ Listed as a minimum requirement, so it gets real treatment rather than "we run `
 - Deployments reference the image **digest**, not the tag
 - SBOM generated per build (syft), stored as a versioned artifact
 
+> **Amended in Phase 2 (2026-08-12).** Built and measured; see
+> [the Phase 2 verification record](./phases/phase2/2026-08-12-local-verification.md).
+>
+> - The base is **`python:3.14.6-slim`**, pinned by *index* digest and built for
+>   **`linux/arm64`**. The exact patch version keeps the container, `app/.venv`
+>   and CI on one interpreter; the index digest keeps the Dockerfile
+>   architecture-neutral.
+> - **Reproducibility is proved by digest comparison, not asserted.** Two clean
+>   builds of a commit produce the same manifest digest. Three things are each
+>   necessary, and the first is not obvious: the default buildx driver **accepts
+>   `rewrite-timestamp` and ignores it**, so a `docker-container` driver and the
+>   OCI exporter are required; `SOURCE_DATE_EPOCH` and the image's `built_at`
+>   both derive from the commit rather than the clock; and bytecode is compiled
+>   with PEP 552 hash-based invalidation, because a default `.pyc` header embeds
+>   the source mtime.
+> - `rewrite-timestamp` applies **`min(mtime, SOURCE_DATE_EPOCH)`** — it
+>   normalises files newer than the commit and preserves ones older than it — so
+>   the build normalises the application sources' timestamps itself rather than
+>   relying on it. Without that, a fresh clone and a long-lived working copy
+>   produce different digests from identical source.
+> - The tag's build number is `CODEBUILD_BUILD_NUMBER` in the pipeline and **`0`
+>   locally**, with a **`-dirty`** suffix on an unclean tree, so a local artifact
+>   can never be mistaken for a pipeline one.
+> - SBOM by **syft 1.51.0 from a digest-pinned container**, reading the **OCI
+>   archive** rather than the Docker daemon — so no third-party image is given
+>   the daemon socket, and the SBOM describes the artifact of record.
+> - The image cannot carry its own digest, so `/version` reports `image_digest`
+>   only when the deployer injects it: the **ECS task definition** in Phases 5
+>   and 6.
+
 ### 4.2 Artifact versioning
 
 - Version scheme: `MAJOR.MINOR.<CodeBuild build number>` plus git SHA
