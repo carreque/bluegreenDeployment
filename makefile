@@ -118,8 +118,36 @@ run-local: local-tables ## Run the API against DynamoDB Local
 	@cd $(APP_DIR) && PYTHONPATH=src $(PY) -m uvicorn bgd.api.main:create_app \
 	  --factory --reload --port 8080
 
-# PLANNED: build          Build the container image (Phase 2)
-# PLANNED: sbom           Generate the SBOM with syft (Phase 2)
+# ---------------------------------------------------------------------------
+# Phase 2 — container image
+#
+# The build itself lives in scripts/, because reproducibility needs a specific
+# buildx driver, two exporters and timestamps derived from git — none of which
+# fits a three-line recipe. See docs/phases/phase2/…-implementation-plan.md.
+# ---------------------------------------------------------------------------
+
+.PHONY: build
+build: ## Build the container image reproducibly and record its digest
+	@./scripts/build-image.sh
+
+# --no-cov: the container is a separate process, so it executes none of the
+# lines coverage measures, and the 90% gate would fail for an unrelated reason.
+.PHONY: image-test
+image-test: deps build local-tables ## Run the image suite against the built container
+	@cd $(APP_DIR) && $(PY) -m pytest -m image --no-cov
+
+.PHONY: sbom
+sbom: build ## Generate the SBOM for the built image with syft
+	@./scripts/generate-sbom.sh
+
+.PHONY: image-verify
+image-verify: ## Prove two clean builds produce the same image digest
+	@./scripts/verify-image-repeatability.sh
+
+.PHONY: run-image
+run-image: build local-tables ## Run the built image against DynamoDB Local on :8081
+	@./scripts/run-image.sh
+
 # PLANNED: plan-LAYER     terraform plan for one layer (Phase 3)
 # PLANNED: apply-LAYER    terraform apply for one layer (Phase 3)
 # PLANNED: seed-ecr       Push the first real image to ECR (Phase 3)

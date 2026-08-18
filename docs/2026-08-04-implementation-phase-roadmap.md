@@ -64,7 +64,7 @@ A note on the pipelines living in `foundation`: the pipelines are created by a l
 |---|---|
 | 0 | `feat/Phase0_Scaffolding` |
 | 1 | `feat/Phase1_Application` |
-| 2 | `feat/Phase2_ContainerBuild` |
+| 2 | `feat/reproducible_container_build` |
 | 3 | `feat/Phase3_BootstrapFoundation` |
 | 4 | `feat/Phase4_Network` |
 | 5 | `feat/Phase5_Staging` |
@@ -78,6 +78,10 @@ A note on the pipelines living in `foundation`: the pipelines are created by a l
 > Amended in Phase 0. The table originally read `phase-NN-kebab-case`; it was
 > changed to match `feat/Phase0_Scaffolding`, the branch already in flight when
 > this convention was settled.
+>
+> Amended in Phase 2, for the same reason: row 2 read
+> `feat/Phase2_ContainerBuild`, and the branch already in flight was
+> `feat/reproducible_container_build`.
 
 The cycle for each phase:
 
@@ -153,13 +157,37 @@ The FastAPI service, built test-first, running entirely locally against DynamoDB
 
 Turn the application into an artifact that satisfies the build-reproducibility requirement (§4.1) in a way that can be pointed at, not merely asserted.
 
-- Multi-stage `Dockerfile` on `python:3.14-slim` **pinned by SHA256 digest**, running as a non-root user.
+- Multi-stage `Dockerfile` on `python:3.14.6-slim` **pinned by SHA256 digest**, running as a non-root user.
 - `pip install --require-hashes` against the compiled requirements.
 - Version metadata injected at build time as build arguments and surfaced by `/version`.
 - SBOM generated with syft.
 - Local build, container smoke test, and a repeatability check that the same input produces the same image content.
 
-**Exit criteria:** the image builds locally, the container serves all endpoints, `/version` reports the injected metadata, and an SBOM is produced.
+> **Amended in Phase 2 (2026-08-12).** Three changes, each with a consequence a
+> later phase inherits.
+>
+> - **`python:3.14.6-slim`, not `python:3.14-slim`.** The floating tag now
+>   resolves to 3.14.7, which would put the container one patch ahead of
+>   `.python-version` and of CI. The exact tag restores design §1.6's parity
+>   claim; a patch upgrade becomes a deliberate commit moving both pins together.
+> - **The image targets `linux/arm64` only.** It builds natively on the
+>   development machine and runs on Graviton, which is cheaper. **Phases 5 and 6
+>   must therefore set `runtime_platform { cpu_architecture = "ARM64" }` on both
+>   task definitions** — an `X86_64` task definition cannot start this image —
+>   and **Phase 8's CodeBuild project needs `ARM_CONTAINER` compute.**
+> - **`/version` reports `image_digest` only when the deployer supplies it.** An
+>   image cannot contain its own digest, since the digest is its hash, so
+>   **Phases 5 and 6 must set `BGD_IMAGE_DIGEST` in the ECS task definition's
+>   container environment.** Without it a live task reports `unknown`.
+>
+> The repeatability check is stronger than "the same image content": two clean
+> builds produce the **same manifest digest**, the identifier ECR stores and ECS
+> deploys against. That holds because every timestamp derives from the commit
+> rather than the clock. It requires a `docker-container` buildx driver — the
+> default driver accepts `rewrite-timestamp` and silently ignores it — so
+> `scripts/build-image.sh` is the only supported build path.
+
+**Exit criteria:** the image builds locally, the container serves all endpoints, `/version` reports the injected metadata, an SBOM is produced, two clean builds produce the same manifest digest, and the image does not run as root.
 
 ### Phase 3 — Terraform bootstrap and foundation
 
@@ -196,6 +224,7 @@ Deliberately the simpler of the two environments — rolling deployments, one ta
 - ALB with an HTTPS listener and an HTTP→HTTPS redirect, one target group.
 - DynamoDB on-demand tables for staging.
 - ECS cluster, task definition, service with the rolling deployment controller, one task.
+- **`runtime_platform { cpu_architecture = "ARM64" }`** on the task definition, and **`BGD_IMAGE_DIGEST`** in its container environment — both inherited from Phase 2, and both are silent failures if missed: the first fails at task start, the second leaves `/version` reporting `unknown` in a live environment.
 - Separate task execution role and task role; CloudWatch log group with retention.
 - Route 53 record for `staging-api.carloscloudengineer.com`.
 
@@ -207,6 +236,7 @@ The technical centre of the project.
 
 - ALB with a `:443` production listener and a `:8443` **test listener**, plus two target groups.
 - ECS service with `deployment_configuration { strategy = "BLUE_GREEN" }` and the required `load_balancer.advanced_configuration`.
+- **`runtime_platform { cpu_architecture = "ARM64" }`** and **`BGD_IMAGE_DIGEST`** on this task definition too (Phase 2). The second matters more here than in staging: `/version` is the blue/green evidence surface, and the image digest is what ECS actually deploys.
 - Three lifecycle hook Lambdas: `PRE_SCALE_UP`, `POST_TEST_TRAFFIC_SHIFT` (the dark canary gate — this is where a bad build dies before any user sees it), and `POST_PRODUCTION_TRAFFIC_SHIFT`.
 - Five-minute bake period with CloudWatch alarms attached for automatic rollback: ALB 5xx rate, target response time p95, unhealthy host count.
 - Route 53 record for `api.carloscloudengineer.com`.

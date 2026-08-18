@@ -19,6 +19,14 @@ absolute path, never `python3` on `PATH`.
 | `make lint` | `ruff check` and `ruff format --check` |
 | `make local-down` | Stops DynamoDB Local and discards its data |
 | `make deps-compile` | Recompiles both hash-pinned requirements locks |
+| `make build` | Builds the image reproducibly and records its digest in `dist/` |
+| `make image-test` | Runs the `image`-marked suite against the built container |
+| `make image-verify` | Two clean builds; proves they produce the same digest |
+| `make sbom` | Writes `dist/sbom.spdx.json` with a digest-pinned syft |
+| `make run-image` | Serves the built image on `:8081`, with the real digest injected |
+
+`make test` never builds a container: the image suite carries an `image` marker
+that `addopts` deselects by default.
 
 `make run-local` needs `app/.env`; copy it from `app/.env.example`. No AWS
 credentials are involved — the repository supplies dummy ones when
@@ -65,4 +73,32 @@ healthy task at once.
 `:443` and `:8443` listeners at the same time, and the two different SHAs are the
 direct proof of which colour serves whom.
 
-**Phase 2** adds the multi-stage Dockerfile, digest-pinned base image and SBOM.
+## The image
+
+Two stages on `python:3.14.6-slim`, pinned by SHA256 digest — 3.14.6 exactly,
+so the container, `app/.venv` and CI all run the interpreter named in
+`.python-version`. The builder stage resolves a virtualenv at `/opt/venv` from
+the hash-locked `requirements.txt`; the runtime stage copies it, adds `src/` at
+`PYTHONPATH=/app/src`, and runs as the numeric UID `10001` with no account —
+`useradd` would record the day it ran in `/etc/shadow` and break reproducibility
+across a midnight boundary.
+
+The target is **`linux/arm64`**, which Phases 5 and 6 must match with
+`runtime_platform { cpu_architecture = "ARM64" }` on both task definitions.
+
+Two clean builds of the same commit produce the **same manifest digest** — the
+identifier ECR stores and ECS deploys against. That holds because every
+timestamp derives from the commit rather than the clock, so the digest is a
+function of the source; `make image-verify` proves it, and it only works through
+`scripts/build-image.sh`, since the default buildx driver ignores
+`rewrite-timestamp`.
+
+`/version` reports `version`, `git_sha` and `built_at` from build arguments.
+`image_digest` stays `unknown` in the image, because an image cannot contain its
+own hash: the ECS task definition supplies it in Phases 5 and 6, and
+`make run-image` supplies it locally.
+
+For the whole stack in containers, `make local-tables` once and then
+`docker compose --profile app up`. The `app` profile keeps that container out of
+`make test` and `make image-test`, which only need DynamoDB Local. Compose passes
+no build arguments, so `/version` there reports its defaults.

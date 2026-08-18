@@ -1,8 +1,8 @@
 # Local development and test dependencies.
 #
-# Phase 1 runs only DynamoDB Local here; the API runs on the host through
-# uvicorn, because the Dockerfile does not exist until Phase 2, which adds an
-# `api` service to this file.
+# Phase 2 added the `api` service below, so `docker compose up` now brings up
+# the whole local stack. The API can still be run from the host virtualenv with
+# `make run-local`, or from the image with `make run-image`.
 #
 # Pinned by digest rather than tag, per design §4.1. Recorded 2026-08-05 —
 # re-record with:
@@ -22,3 +22,39 @@ services:
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
     ports:
       - "8000:8000"
+
+  # Phase 2. The full local stack in one command:
+  #
+  #   make local-tables                      # once, to create the tables
+  #   docker compose --profile app up        # dynamodb-local + the API
+  #
+  # The profile is load-bearing, not tidiness. `make local-up` runs a plain
+  # `docker compose up -d` and is a prerequisite of `make test`, `make
+  # image-test` and `make run-image`; without the profile, every one of those
+  # would build and start this container as a side effect — rebuilding an image
+  # on each `make test`, and taking port 8081 out from under `make run-image`.
+  # A profiled service is skipped unless it is asked for by name.
+  #
+  # A development convenience, not the artifact. compose builds with the default
+  # buildx driver, which does not honour rewrite-timestamp, and passes none of
+  # the build arguments, so /version here reports its defaults and the image is
+  # not digest-identical to `make build`'s. The artifact of record always comes
+  # from make.
+  #
+  # Here the endpoint is the compose service name rather than
+  # host.docker.internal, because both containers share a compose network.
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bgd-api
+    depends_on:
+      - dynamodb-local
+    ports:
+      - "8081:8080"
+    environment:
+      BGD_ENVIRONMENT: local
+      BGD_DYNAMODB_ENDPOINT_URL: http://dynamodb-local:8000
+      BGD_ACCOUNTS_TABLE: bgd-us-east-1-local-accounts
+      BGD_TRANSACTIONS_TABLE: bgd-us-east-1-local-transactions

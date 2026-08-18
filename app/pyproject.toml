@@ -10,7 +10,13 @@ requires-python = ">=3.14"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "-q --strict-markers --strict-config --cov --cov-report=term-missing"
+# -m 'not image' is what keeps `make test` fast and docker-free: the image
+# suite needs a built container, and a contributor who never runs docker should
+# still get the Phase 1 experience. `make image-test` overrides it with -m image.
+addopts = "-q --strict-markers --strict-config --cov --cov-report=term-missing -m 'not image'"
+markers = [
+    "image: runs against the built container image; needs docker and `make build`",
+]
 filterwarnings = [
     "error::DeprecationWarning",
     # Starlette 1.4 deprecated httpx in the TestClient in favour of httpx2
@@ -44,5 +50,9 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "ASYNC", "S", 
 # S101 assert-used: asserts are the point of a test.
 # S105/S106 hardcoded passwords: the AWS neutralisation fixture uses literals.
 "tests/**" = ["S101", "S105", "S106"]
+# S603/S607 flag subprocess calls with a non-absolute program name. Driving
+# `docker` by name is the entire job of the image suite, and pinning an
+# absolute path would break between macOS and the CI runner.
+"tests/image/**" = ["S101", "S603", "S607"]
 # T201 print: create_tables is a CLI whose output is the user interface.
 "src/bgd/cli/*" = ["T201"]

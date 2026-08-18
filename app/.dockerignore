@@ -1,0 +1,32 @@
+# Keep the build context to what the image actually needs: src/ and the two
+# requirements files. Everything else here is either useless in the image or
+# actively harmful in it.
+#
+# .venv is the harmful one. It is a macOS-arm64 virtualenv built by
+# scripts/create-venv.sh; copied into a Linux image it would be several hundred
+# megabytes of unusable binaries, and its site-packages would sit on the same
+# PYTHONPATH as the one the builder stage produces.
+#
+# .git is not listed because the context root is app/, which contains no .git.
+# The repository's .git is one level up and never enters the context.
+
+.venv
+tests
+dist
+.pytest_cache
+.ruff_cache
+.coverage
+.env
+docker-compose.yml
+README.md
+
+# The **/ prefix is load-bearing, and its absence was a real defect.
+#
+# .dockerignore patterns are anchored to the context root, so a bare
+# `__pycache__` excludes only app/__pycache__ — never app/src/bgd/__pycache__.
+# Without these two lines the image shipped 24 host-compiled .pyc files, and the
+# image digest changed every time someone ran `make test`, because that is what
+# regenerates them. The entries above are all context-root paths, so they need
+# no prefix; these two are nested and do.
+**/__pycache__
+**/*.pyc
