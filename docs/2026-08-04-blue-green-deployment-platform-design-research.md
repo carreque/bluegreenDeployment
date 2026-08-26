@@ -150,7 +150,24 @@ locals {
 }
 ```
 
+> **Amended in Phase 3 (2026-08-24).** The filter above reads
+> `!z.private_zone`; it must be **`z.private_zone != true`**. The `for_each`
+> resolves **every** hosted zone in the account, so each zone's attributes have
+> to survive the expression before the name filter can exclude it — and a null
+> boolean makes the negation abort the entire plan with
+> `argument must not be null`, on a line that looks correct. `!= true` is
+> null-safe and identical for every non-null value. Found by the Phase 3 test
+> suite before the first apply, not by an apply that failed.
+
 **Caveat that must be handled explicitly:** on the *create* path, the new zone's NS records are not yet delegated at the registrar, so `aws_acm_certificate_validation` will wait for a validation CNAME that is not publicly resolvable — and hang until its 75-minute default timeout. The create path is therefore inherently a **two-phase apply**: create zone → delegate NS at registrar → apply again for the certificate. This is built in as a `wait_for_validation` flag rather than left to be discovered as a hang.
+
+> **Amended in Phase 3 (2026-08-24).** The AWS provider now resolves to
+> **6.61.0**; Phase 0 recorded 6.57.1. Both Phase 3 layers pin `~> 6.61` and
+> commit `.terraform.lock.hcl` with hashes for `darwin_arm64`, `linux_arm64` and
+> `linux_amd64`. The second and third matter because Phase 8's CodeBuild runs
+> `ARM_CONTAINER` (Phase 2 §D1): a lock file generated only on this Mac fails
+> there with a missing-hash error that reads as a corrupt lock rather than a
+> missing platform.
 
 ### 1.8 Terraform state locking no longer needs DynamoDB
 

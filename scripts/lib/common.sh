@@ -18,10 +18,31 @@ else
   C_RESET='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_DIM=''
 fi
 
+# A second palette, keyed on stderr. Progress goes to stdout and diagnostics go
+# to stderr (see below), and the two are redirected independently: `script > log`
+# leaves stderr on the terminal, where colour is still wanted.
+if [[ -t 2 ]]; then
+  E_RESET=$'\033[0m'
+  E_RED=$'\033[31m'
+  E_YELLOW=$'\033[33m'
+else
+  E_RESET='' E_RED='' E_YELLOW=''
+fi
+
+# Progress and results go to stdout; diagnostics go to stderr.
+#
+# The split is not cosmetic. A helper that writes a failure to stdout and is
+# called inside "$(...)" has that failure captured into the variable being
+# assigned rather than shown, and under `set -e` the script then exits non-zero
+# in complete silence — no message on any stream. That cost real debugging time
+# in Phase 3 (scripts/tf.sh), and the fix belongs here rather than in each
+# caller that has to remember to avoid the shape.
+#
+# Anything added below keeps this rule: if it reports a problem, it writes >&2.
 info() { printf '%s==>%s %s\n' "$C_BLUE" "$C_RESET" "$*"; }
 ok() { printf '%s  ✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
-warn() { printf '%s  !%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
-fail() { printf '%s  ✗%s %s\n' "$C_RED" "$C_RESET" "$*"; }
+warn() { printf '%s  !%s %s\n' "$E_YELLOW" "$E_RESET" "$*" >&2; }
+fail() { printf '%s  ✗%s %s\n' "$E_RED" "$E_RESET" "$*" >&2; }
 dim() { printf '%s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
 
 die() {
@@ -30,7 +51,10 @@ die() {
 }
 
 # Inline status marks, for the last column of a table row. Unlike ok()/fail()
-# these emit no leading padding and no trailing space.
+# these emit no leading padding and no trailing space — and unlike fail() they
+# stay on **stdout**, because the row they complete was printed there. Sending
+# only the mark to stderr would split every table row across two streams and
+# scramble the alignment the moment either one is redirected.
 mark_ok() { printf '%s✓%s\n' "$C_GREEN" "$C_RESET"; }
 mark_fail() { printf '%s✗ %s%s\n' "$C_RED" "$*" "$C_RESET"; }
 mark_warn() { printf '%s! %s%s\n' "$C_YELLOW" "$*" "$C_RESET"; }

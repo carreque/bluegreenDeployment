@@ -1,0 +1,12 @@
+# Every variable in this layer has a default that is correct for the project's
+# one account. This file exists to document the shape of an override, not
+# because an override is needed.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored: variable files may carry account IDs and ARNs.
+
+# project_name = "bgd"
+# region       = "us-east-1"
+# account_id   = "590184028094"
+# owner        = "carreque45@gmail.com"

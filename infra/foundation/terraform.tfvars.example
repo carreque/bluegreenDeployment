@@ -1,0 +1,10 @@
+# Every variable has a default correct for this project. This file documents
+# the shape of an override; terraform.tfvars itself is gitignored.
+#
+# The one worth knowing about:
+#
+#   wait_for_validation = false
+#
+# Set it only if the hosted zone had to be created rather than adopted, in which
+# case the registrar's name servers must be repointed before a second apply with
+# it back at true. Phase 0 confirmed the adopt path, so this should stay unset.
