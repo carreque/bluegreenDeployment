@@ -82,6 +82,9 @@ A note on the pipelines living in `foundation`: the pipelines are created by a l
 > Amended in Phase 2, for the same reason: row 2 read
 > `feat/Phase2_ContainerBuild`, and the branch already in flight was
 > `feat/reproducible_container_build`.
+>
+> Phase 3 needed no amendment: `feat/Phase3_BootstrapFoundation` is the branch
+> the table names and the branch that was used.
 
 The cycle for each phase:
 
@@ -200,10 +203,36 @@ First AWS resources. Both applies are local — the pipelines that will later ma
 
 These are the **two irreducibly manual steps in the whole project**, and the Phase 3 runbook says so plainly rather than burying them in a list.
 
+> **Amended in Phase 3 (2026-08-24).** There are **three**. The SNS email
+> subscription is the third: `aws_sns_topic_subscription` with
+> `protocol = "email"` is created `PendingConfirmation` and stays there until the
+> recipient clicks the link AWS sends. Terraform reports the resource as created
+> and `terraform plan` stays clean indefinitely, so an unconfirmed subscription
+> is silent — its symptom is Phase 9's alerts never arriving, three phases later
+> and looking like a bug in the alerting. The
+> [Phase 3 runbook](./runbooks/phase-03-bootstrap-and-foundation.md) lists it as
+> a step with its own verification command.
+>
+> **Also amended in Phase 3.** §1's layer diagram lists both pipelines and the
+> shared IAM roles under `foundation`; this task list does not, and the task list
+> is what was built. `foundation` still owns the pipelines — Phases 7 and 8 add
+> files to this layer rather than creating a new one — and each of design §8.1's
+> six IAM roles is created by the phase that creates the resource it acts on,
+> because a role's policy cannot be scoped to resources that do not exist yet.
+
 The second has a deadline the first does not. Tag activation is **not retroactive**: a key only becomes activatable once AWS has observed it on a real resource — so it cannot be done before this phase — and any cost recorded before activation stays permanently unattributed. Doing it late does not delay anything; it silently loses data. See [the naming and tagging convention](./naming-and-tagging-convention.md#6-when-the-tags-actually-take-effect).
 - **Seed ECR** with the real image from Phase 2, so the ECS services in Phases 5 and 6 have something to run.
 
 **Exit criteria:** state backend live and locking; certificate issued and validated; ECR holds the seeded image; the SNS email subscription is confirmed.
+
+> **Amended in Phase 3 (2026-08-24).** The phase was delivered in two halves.
+> Everything that can be built and proved without an AWS session was — both
+> layers, their tests, the linting and the seed script, verified by
+> `make tf-check` against mocked providers — and the applies that create the
+> resources these four criteria describe were handed over as
+> [a runbook](./runbooks/phase-03-bootstrap-and-foundation.md). **None of the
+> four criteria is met by the branch alone.** The branch's own gate is
+> `make tf-check`; the criteria above are met when the runbook is executed.
 
 ### Phase 4 — Network layer
 

@@ -14,6 +14,9 @@ longer than three lines, or needing a conditional or a loop, lives here.
 | `generate-sbom.sh` | 2 — SBOM from the OCI archive with a digest-pinned syft |
 | `verify-image-repeatability.sh` | 2 — two clean builds, one digest comparison |
 | `run-image.sh` | 2 — run the built image against DynamoDB Local |
+| `tf.sh` | 3 — per-layer terraform driver; `-backend=false` for fmt, validate and test |
+| `lint-infra.sh` | 3 — tflint and checkov from digest-pinned containers |
+| `seed-ecr.sh` | 3 — copy the Phase 2 OCI archive into ECR, digest verified |
 
 `lib/common.sh` also owns `image_build_identity`, which derives the version, git
 SHA and both timestamps for a build. It is shared rather than duplicated because
@@ -27,10 +30,30 @@ fails mid-destroy, and waits on ECS draining. That is real shell, and macOS's GN
 Make 3.81 has no `.ONESHELL`, so every recipe line would otherwise run in its own
 subshell.
 
+`lint-infra.sh` and `seed-ecr.sh` follow `generate-sbom.sh` in running their
+tools from **digest-pinned containers** rather than host installs. Nothing to
+install, no version for `verify-tools.sh` to drift against, and the identical
+command works in the Phase 7 and 8 CodeBuild projects.
+
 Scripts are sourced with `set -euo pipefail`. Note that a failing command
 substitution aborts the script under `set -e`, so probes that report through a
 non-zero exit — `pyenv version`, a `grep` that finds nothing — must use the `try`
 helper in `lib/common.sh`.
+
+**Progress goes to stdout; diagnostics go to stderr.** `info`, `ok` and `dim`
+write to stdout. `warn`, `fail` and `die` write to stderr. Anything added to
+`lib/common.sh` that reports a problem must keep that rule.
+
+This is not a style preference. Until Phase 3, `fail()` and `die()` both wrote to
+stdout, which meant a helper that died inside `"$(...)"` had its error message
+captured into the variable being assigned — and under `set -e` the script then
+exited 1 with **no message on any stream**. `tf.sh` hit it while being written.
+
+`mark_ok`, `mark_fail` and `mark_warn` are the exception and stay on stdout: they
+are the last column of a table row already printed there, and splitting a single
+row across two streams scrambles it the moment either is redirected. There are
+two colour palettes for the same reason — `C_*` keyed on `-t 1`, `E_*` on `-t 2`
+— so `script > log` keeps colour on the errors still going to the terminal.
 
 macOS ships **bash 3.2**, so `set -u` and arrays interact badly: expanding an
 empty array as `"${arr[@]}"` is itself an unbound-variable error there. Use
