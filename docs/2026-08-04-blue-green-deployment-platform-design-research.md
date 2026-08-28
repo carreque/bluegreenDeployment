@@ -241,6 +241,13 @@ Three further reasons:
 
 **Honest counterpoint, recorded deliberately:** a real regulated fintech typically runs **both** — interface endpoints for AWS-service traffic that must never traverse the internet, *and* NAT for genuine third-party egress. Choosing one here is a budget trade-off, not an oversight.
 
+> **Amended in Phase 4 (2026-08-26).** A DynamoDB gateway endpoint was added
+> alongside the S3 one — not in the original list above. This **strengthens**
+> the third argument rather than revising it: free-endpoint coverage now
+> spans the application's entire data path, not only the ECR layer pulls S3
+> was covering. Every account read and every transaction write reaches
+> DynamoDB without touching the NAT's data-processing meter at all.
+
 ---
 
 ## 4. Application design

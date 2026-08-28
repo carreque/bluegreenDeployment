@@ -7,7 +7,7 @@ state file; `modules/` holds reusable code that is never applied directly.
 |---|---|---|---|
 | `bootstrap/` | never destroyed | $0 | 3 |
 | `foundation/` | persistent | ~$1/mo | 3 |
-| `network/` | ephemeral | ~$33/mo | 4 |
+| `network/` | ephemeral | ~$34/mo (unverified — pending [runbook §8](../docs/runbooks/phase-04-network.md)'s pricing-API check) | 4 |
 | `environments/staging/` | ephemeral | ~$25/mo | 5 |
 | `environments/prod/` | ephemeral | ~$40/mo | 6 |
 

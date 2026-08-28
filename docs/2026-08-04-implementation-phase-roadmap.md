@@ -31,7 +31,7 @@ The design document left two open inputs and several sequencing questions unansw
 
 ## 1. Why five layers instead of four
 
-The four-layer split (bootstrap → platform → staging → prod) collides with the destroy-when-idle policy. The NAT Gateway is the single largest idle cost at ~$33/month and it lives in the platform layer — but so do the hosted zone, the ACM certificate, the ECR images, the artifact bucket holding build history, and the CodeConnections link that requires a manual console click. Destroying platform to stop paying for NAT takes all of that with it.
+The four-layer split (bootstrap → platform → staging → prod) collides with the destroy-when-idle policy. The NAT Gateway is the single largest idle cost at ~$33/month (unverified — see §3's Phase 4 amendment, which puts it nearer $36-37) and it lives in the platform layer — but so do the hosted zone, the ACM certificate, the ECR images, the artifact bucket holding build history, and the CodeConnections link that requires a manual console click. Destroying platform to stop paying for NAT takes all of that with it.
 
 Splitting platform into **foundation** (durable, effectively free, painful to recreate) and **network** (ephemeral, expensive) resolves the conflict.
 
@@ -41,12 +41,14 @@ infra/
   foundation/     Route 53 zone, ACM cert, ECR, artifact       persistent   ~$1/mo
                   bucket, SNS, CodeConnections, both
                   pipelines, shared IAM roles
-  network/        VPC, subnets, IGW, NAT, S3 gateway           ephemeral   ~$33/mo
+  network/        VPC, subnets, IGW, NAT, S3 gateway           ephemeral   ~$33/mo*
                   endpoint, security groups
   envs/staging/   ALB, ECS service (rolling), DynamoDB         ephemeral   ~$25/mo
   envs/prod/      ALB (:443 + :8443), ECS service              ephemeral   ~$40/mo
                   (BLUE_GREEN), lifecycle hooks, DynamoDB
 ```
+
+\* Unverified — see §3's Phase 4 amendment: arithmetic against published rates, not a measurement, and probably nearer $36-37/mo once the NAT Gateway's in-use Elastic IP charge (billed since 1 February 2024) is counted.
 
 **Teardown** destroys `prod` → `staging` → `network`, in that order. Idle cost falls to roughly $1/month. **Rebuild** applies `network` → `staging` → `prod`. The certificate is not re-issued, images are not lost, and the CodeConnections click is not repeated.
 
@@ -245,6 +247,42 @@ The second has a deadline the first does not. Tag activation is **not retroactiv
 A first-cut teardown script lands here, because this is the first layer that costs real money when idle. Phase 10 hardens it.
 
 **Exit criteria:** `terraform apply` and `terraform destroy` both succeed cleanly; a task in a private subnet can reach the internet through NAT.
+
+> **Amended in Phase 4 (2026-08-26).** The layer built more than this task
+> list names, all decided and recorded in [the Phase 4
+> plan](./phases/phase4/2026-08-26-phase-04-implementation-plan.md)'s §0.1:
+>
+> - **A DynamoDB gateway endpoint, alongside the S3 one** (D4). Not named
+>   above or in design §3.1. Free, and DynamoDB is the application's entire
+>   data path — without it, every read and write leaves through the NAT and
+>   pays $0.045/GB for traffic that never needed to leave AWS.
+> - **Four security groups, one ALB/task pair per environment, not one
+>   shared pair** (D3). The naming convention's `<env>` segment wins over this
+>   task list's "ALB-to-task and task-to-egress" phrasing, which reads as a
+>   single pair. Staging and production tasks cannot reach each other, and
+>   production's ALB group opens an extra `:8443` for Phase 6's blue/green
+>   test listener that staging's does not.
+> - **VPC flow logs**, `ALL` traffic at 7-day retention (D5). Not in the
+>   original list; added because checkov fails a VPC with none of them
+>   (`CKV2_AWS_11`), and because they are the tool that answers "why can this
+>   task not reach that endpoint" — the likeliest failure mode of Phases 5
+>   and 6.
+> - **`network` takes no `terraform_remote_state` dependency on `foundation`**
+>   (D2), unlike Phases 5 and 6. It rebuilds the four convention variables
+>   itself rather than reading them, which keeps `make tf-check` fully
+>   offline and keeps `terraform destroy` on this layer working even if
+>   `foundation`'s state is unreadable.
+> - **The cost figure needs confirming.** ~$34/month above was arithmetic,
+>   not a measurement — no AWS session was available when the plan was
+>   written, and since 1 February 2024 AWS also bills the NAT Gateway's
+>   in-use Elastic IP (~$3.60/month on top of the ~$32.85/month gateway
+>   rate). [The runbook](./runbooks/phase-04-network.md)'s step 8 confirms
+>   the real number against the pricing API.
+>
+> **Neither exit criterion above is met by the branch alone.** The branch's
+> own gate is `make tf-check`; both criteria are met when [the
+> runbook](./runbooks/phase-04-network.md) is executed. See [the local
+> verification record](./phases/phase4/2026-08-26-local-verification.md).
 
 ### Phase 5 — Staging environment
 
