@@ -142,10 +142,14 @@ before this one, in every prior test run, was against a mocked provider. If
 step 1's ECR check passed, this data source should resolve cleanly; if it
 does not, re-read step 1 rather than assuming the layer is broken.
 
-**What to read in the plan: roughly 15 resources to add, and zero to change
-or destroy.** In particular, confirm the plan shows exactly:
+**What to read in the plan: exactly 15 resources to add, and zero to change
+or destroy.** That total is a count of the `resource` blocks across
+`alb.tf`, `dns.tf`, `dynamodb.tf`, `ecs.tf` and `iam.tf`, not an estimate —
+confirm the plan shows exactly:
 
 - one `aws_lb`, one `aws_lb_target_group`, two `aws_lb_listener` (80 and 443)
+- one `aws_route53_record` — the `staging-api.carloscloudengineer.com` alias
+  every curl in steps 7 and 8 depends on
 - one `aws_ecs_cluster`, one `aws_ecs_task_definition`, one `aws_ecs_service`
 - two `aws_iam_role` (`task-exec` and `task`) with their policies
 - two `aws_dynamodb_table` (`accounts` and `transactions`, the latter with its
@@ -253,17 +257,26 @@ repeat), then `200` with one item in `items`. `account_id` is required on the
 list call and returns `422` without it.
 
 **Report back whether the `POST /api/transactions` call succeeded, and treat
-that answer as significant.** The comment above `aws_iam_role_policy.task` in
-`infra/environments/staging/iam.tf` records an open question: the write path
-needs `dynamodb:UpdateItem` for certain, but whether
-`dynamodb:TransactWriteItems` is *additionally* required for the compound
-`transact_write_items` call could not be confirmed without an AWS session.
-This step is what settles it empirically, not a read of AWS documentation.
-**If `POST /api/transactions` succeeds, the open question is answered — the
-per-item actions were sufficient — and `dynamodb:TransactWriteItems` becomes
-a candidate for removal from that policy**, tightening it to what the
-application actually needs. Do not silently note this and move on; say so
-when reporting this step's results.
+that answer as significant.** The task-role policy in
+`infra/environments/staging/iam.tf` grants `dynamodb:UpdateItem` and
+`dynamodb:TransactWriteItems` **together**, as one set, for the compound
+`transact_write_items` call `post_transaction` makes. A successful POST here
+proves that granted set is sufficient — and specifically proves
+`dynamodb:UpdateItem` is present and working, since the transaction's Update
+item cannot succeed without it. **It does not determine whether
+`dynamodb:TransactWriteItems` is separately required**: the call exercises
+both permissions at once, so success cannot isolate which one was necessary,
+and running the idempotent repeat does not help either — `dynamodb.py` issues
+the identical `transact_write_items` call on both requests, with idempotency
+coming from a `ConditionExpression` raising `TransactionCanceledException`,
+not from a different code path, so IAM authorization is identical on both
+calls.
+
+The experiment that *would* determine it, **optional tidying, not a required
+step** — worth doing only if someone wants the policy minimal: remove
+`dynamodb:TransactWriteItems` from the task-role policy, `make apply-staging`,
+and repeat this step. A failure proves the action necessary and it goes back
+in; a success proves it redundant and it can stay removed.
 
 ---
 
@@ -346,5 +359,5 @@ sessions.
 | `GET /api/transactions` 500, everything else fine | The task role is missing the LSI index ARN (`iam.tf`'s `aws_iam_role_policy.task`, `.../index/created_at-index`). |
 | `/version` reports `image_digest: unknown` | `BGD_IMAGE_DIGEST` is absent from the task definition's container environment. |
 | Tasks are untagged in the console | `propagate_tags` was dropped from `aws_ecs_service.api`; `terraform plan` will not show it — see step 9. |
-| `POST /api/transactions` fails `AccessDeniedException` on the second (idempotent) call only | Unexpected under the current policy — both `UpdateItem` and `TransactWriteItems` are granted. If this happens anyway, check `iam.tf`'s task policy for a resource-ARN typo on the `accounts` table before assuming a permissions gap; this is the failure mode step 8 exists to catch. |
+| `POST /api/transactions` fails `AccessDeniedException` | Unexpected under the current policy — both `UpdateItem` and `TransactWriteItems` are granted. `dynamodb.py` runs the identical `transact_write_items` call on the first request and the idempotent repeat, so a missing permission fails **both calls, starting with the first**, not just the retry. If this happens anyway, check `iam.tf`'s task policy for a resource-ARN typo on the `accounts` or `transactions` table before assuming a permissions gap; this is the failure mode step 8 exists to catch. |
 

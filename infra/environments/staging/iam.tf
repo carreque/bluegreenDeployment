@@ -101,8 +101,15 @@ resource "aws_iam_role_policy" "task" {
   # an AWS session. It is a real DynamoDB API action, so granting it is either
   # necessary or inert — never harmful on its own — and omitting it risks
   # breaking the main write path if the per-item actions turn out not to be
-  # sufficient. The runbook's POST /api/transactions step settles this
-  # empirically; remove this action if that step proves it unnecessary.
+  # sufficient. The runbook's POST /api/transactions step exercises both
+  # permissions in the same call, so a success proves only that the granted
+  # set is sufficient — it cannot isolate which member was necessary, since
+  # both the first call and the idempotent repeat run the identical
+  # transact_write_items call (idempotency comes from a ConditionExpression
+  # raising TransactionCanceledException, not from a different code path).
+  # Isolating this action requires the separate, optional experiment the
+  # runbook describes: remove it, apply, and repeat the step — a failure
+  # proves it necessary, a success proves it redundant.
   #
   # The index ARN below is the other easy thing to omit: an IAM index is a
   # distinct resource, and without it every endpoint works except
