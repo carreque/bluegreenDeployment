@@ -131,17 +131,32 @@ run "the_tables_match_the_application_schema" {
 run "the_task_role_grants_exactly_what_the_application_calls" {
   command = apply
 
-  # dynamodb.py calls put_item, get_item, scan and query. Nothing else — no
-  # update_item, no delete_item, and deliberately no describe_table, because
-  # ping() uses a data-plane read instead. Plan §F6.
+  # dynamodb.py calls get_item, put_item, scan and query directly, plus
+  # transact_write_items from post_transaction, which bundles a Put on
+  # transactions with an Update on accounts. update_item is granted for that
+  # Update; deliberately no delete_item, and no describe_table because ping()
+  # uses a data-plane read instead. Plan §F6 undercounted this action set.
   assert {
     condition = toset(jsondecode(aws_iam_role_policy.task.policy).Statement[0].Action) == toset([
       "dynamodb:GetItem",
       "dynamodb:PutItem",
       "dynamodb:Query",
       "dynamodb:Scan",
+      "dynamodb:TransactWriteItems",
+      "dynamodb:UpdateItem",
     ])
     error_message = "the task role grants a different action set than app/src/bgd/repository/dynamodb.py calls"
+  }
+
+  # post_transaction's Update targets the accounts table, so UpdateItem must be
+  # granted on it. Asserted separately because this is the action the plan's F6
+  # missed entirely.
+  assert {
+    condition = contains(
+      jsondecode(aws_iam_role_policy.task.policy).Statement[0].Action,
+      "dynamodb:UpdateItem"
+    )
+    error_message = "UpdateItem is missing; POST /api/transactions fails AccessDenied at runtime"
   }
 
   # The trap this asserts against: an IAM index is a distinct ARN. Grant only

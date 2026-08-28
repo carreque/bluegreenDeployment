@@ -87,9 +87,25 @@ resource "aws_iam_role_policy" "task" {
   name = "${local.env_prefix}-task-policy"
   role = aws_iam_role.task.id
 
-  # Exactly the four calls app/src/bgd/repository/dynamodb.py makes, on exactly
-  # the three ARNs it touches. The index ARN is the one easy to omit: an IAM
-  # index is a distinct resource, and without it every endpoint works except
+  # app/src/bgd/repository/dynamodb.py's simple calls are GetItem, PutItem,
+  # Query and Scan. post_transaction is not simple: it is a two-item
+  # transact_write_items call — a Put on transactions guarded by
+  # attribute_not_exists(transaction_id), and an Update on accounts that
+  # applies SET balance_minor = balance_minor + :delta. The Update item is why
+  # UpdateItem must be granted; without it POST /api/transactions, the
+  # application's primary write path, fails AccessDenied at runtime.
+  #
+  # TransactWriteItems is granted alongside it. AWS documents the requirement
+  # as the per-item actions (here, PutItem and UpdateItem), so whether the
+  # compound action is *additionally* required could not be confirmed without
+  # an AWS session. It is a real DynamoDB API action, so granting it is either
+  # necessary or inert — never harmful on its own — and omitting it risks
+  # breaking the main write path if the per-item actions turn out not to be
+  # sufficient. The runbook's POST /api/transactions step settles this
+  # empirically; remove this action if that step proves it unnecessary.
+  #
+  # The index ARN below is the other easy thing to omit: an IAM index is a
+  # distinct resource, and without it every endpoint works except
   # GET /api/transactions, which fails AccessDenied at runtime. Plan §F6.
   policy = jsonencode({
     Version = "2012-10-17"
@@ -101,6 +117,8 @@ resource "aws_iam_role_policy" "task" {
         "dynamodb:PutItem",
         "dynamodb:Query",
         "dynamodb:Scan",
+        "dynamodb:TransactWriteItems",
+        "dynamodb:UpdateItem",
       ]
       Resource = [
         aws_dynamodb_table.accounts.arn,
