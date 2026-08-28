@@ -114,6 +114,21 @@ resource "aws_iam_role_policy" "task" {
   # The index ARN below is the other easy thing to omit: an IAM index is a
   # distinct resource, and without it every endpoint works except
   # GET /api/transactions, which fails AccessDenied at runtime. Plan §F6.
+  #
+  # This precision is action-exact, not resource-exact. The Action list above
+  # really is exactly the six calls the application code makes — nothing
+  # more, nothing unused. The Resource list is a separate, coarser thing: it
+  # is the set of ARNs the application touches at all, and a single
+  # statement grants their full cross-product rather than a per-resource
+  # mapping. That means some pairs in the cross-product are meaningless —
+  # Query and Scan are never issued against accounts, and GetItem, PutItem,
+  # UpdateItem and TransactWriteItems can never apply to the LSI ARN, since
+  # an index is read-only. This is a deliberate simplification, not an
+  # oversight: it only widens access within one application's own two
+  # tables, there is no tenant or blast-radius boundary being crossed, and a
+  # test asserts length(Statement) == 1, so the fix for anyone tempted to
+  # split this into a tighter per-resource mapping is: don't — the single
+  # statement is the intended shape.
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{

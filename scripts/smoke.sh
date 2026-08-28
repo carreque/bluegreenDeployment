@@ -8,9 +8,13 @@
 #
 #   1. /health answers 200 over TLS          the ALB, the certificate, the
 #                                            target group and the task are all up
-#   2. /ready answers 200                    the task role, the security groups
-#                                            and the DynamoDB gateway endpoint
-#                                            are all correct
+#   2. /ready answers 200                    ping() in dynamodb.py is a single
+#                                            get_item against the accounts
+#                                            table, so this proves only
+#                                            dynamodb:GetItem on that one
+#                                            table over the gateway endpoint —
+#                                            not Query on the LSI, and not the
+#                                            write path
 #   3. /version answers 200
 #   4. /version's image_digest equals the     the image Terraform intended is the
 #      digest Terraform deployed              image actually serving traffic
@@ -32,6 +36,15 @@ require_cmd jq
 
 ROOT="$(repo_root)"
 
+# terraform is required only where it is actually used, not unconditionally
+# up front like curl and jq. If the caller supplies both BGD_SMOKE_URL and
+# BGD_SMOKE_DIGEST, the block below never invokes terraform at all — and a
+# later phase's CI is exactly the caller who would do that, passing both
+# values directly from a build pipeline that legitimately has no Terraform
+# binary installed. Requiring it unconditionally would fail that caller for
+# no reason; the require_cmd calls are placed with the terraform invocations
+# themselves instead, so the check only fires on the path that needs it.
+
 env_name="${1:-}"
 case "$env_name" in
   staging | prod) ;;
@@ -48,11 +61,13 @@ BASE_URL="${BGD_SMOKE_URL:-}"
 EXPECTED_DIGEST="${BGD_SMOKE_DIGEST:-}"
 
 if [[ -z "$BASE_URL" ]]; then
+  require_cmd terraform
   BASE_URL="$(terraform -chdir="$layer_dir" output -raw api_url 2>/dev/null)" ||
     die "cannot read the $env_name outputs — apply the layer first, or set BGD_SMOKE_URL"
 fi
 
 if [[ -z "$EXPECTED_DIGEST" ]]; then
+  require_cmd terraform
   EXPECTED_DIGEST="$(terraform -chdir="$layer_dir" output -raw image_digest 2>/dev/null)" ||
     die "cannot read the $env_name image digest — apply the layer first, or set BGD_SMOKE_DIGEST"
 fi
@@ -80,6 +95,13 @@ probe() {
     printf '  %-10s ' "$path"
     mark_fail "no response within ${timeout}s"
     failures=$((failures + 1))
+    # Both failure branches in this function must clear LAST_BODY, not just
+    # the non-2xx one below. The digest check after all three probes reads
+    # whatever LAST_BODY holds and assumes it is /version's response; leaving
+    # a stale value here means a timed-out /version probe silently reuses
+    # /ready's body from the previous probe, and the digest check then fails
+    # jq against the wrong JSON with a message that names the wrong cause.
+    LAST_BODY=""
     return
   }
 

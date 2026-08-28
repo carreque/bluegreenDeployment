@@ -26,7 +26,7 @@ Step 1 below checks all three before anything is planned.
 
 ## 1. Preconditions
 
-**`foundation` is applied.**
+**`foundation` is applied, and its certificate is actually issued.**
 
 ```bash
 terraform -chdir=infra/foundation output -raw certificate_arn
@@ -35,6 +35,22 @@ terraform -chdir=infra/foundation output -raw certificate_arn
 Expected: an ACM certificate ARN. No output, or an error reading state, means
 **stop** — go run [the Phase 3 runbook](./phase-03-bootstrap-and-foundation.md)
 first.
+
+A non-empty ARN is not, by itself, enough — it names the certificate, not its
+validation state. Check the state too:
+
+```bash
+aws acm describe-certificate --certificate-arn "$(terraform -chdir=infra/foundation output -raw certificate_arn)" \
+  --query 'Certificate.Status' --output text
+```
+
+Expected: `ISSUED`. `aws_lb_listener.https` in this layer fails at apply
+against a certificate that is still `PENDING_VALIDATION`. This normally only
+bites on the path where `foundation` **created** the hosted zone rather than
+adopting the registrar's existing one — `wait_for_validation` on the
+certificate defaults to `true`, and `foundation` explicitly supports the
+created-zone path, so validation can still be in flight if `foundation`'s
+apply is checked immediately rather than waited out.
 
 **`network` is applied.**
 
@@ -321,6 +337,19 @@ Phase 6.
 
 ## 11. Teardown and rebuild once
 
+`data.aws_ecr_image` is evaluated on `destroy` as well as on `plan` — Terraform
+still has to resolve `var.image_tag` to a digest to know which resources it is
+tearing down. `foundation`'s ECR lifecycle policy retains only the
+`ecr_max_image_count` most recent images (currently 10, in
+`infra/foundation/variables.tf`), so a tag that was valid at apply time can
+have aged out of the registry by the time teardown runs, especially after a
+run of unrelated `make build && make seed-ecr` cycles on the same repository.
+If that happens, `make teardown` fails inside `data.aws_ecr_image` before
+destroying anything — leaving the ALB and the Fargate task running, and
+billing. The remedy is the same shape as the plan-time failure in step 1: set
+`image_tag` in `terraform.tfvars` to a tag that still exists in ECR (re-run
+the `aws ecr describe-images` check from step 1), then re-run `make teardown`.
+
 ```bash
 make teardown
 make apply-network && make apply-staging && make smoke-staging
@@ -352,6 +381,8 @@ sessions.
 | Symptom | Cause |
 |---|---|
 | Plan fails in `data.aws_ecr_image` | `image_tag` is not in ECR. Run `make seed-ecr`, or pick a tag from the precondition check in step 1. |
+| `make teardown` fails inside `data.aws_ecr_image` before destroying anything | The pinned `image_tag` has aged out of ECR's 10-image retention since apply. Set `image_tag` to a tag that still exists (step 1's `aws ecr describe-images` check) and re-run `make teardown`. See step 11. |
+| Apply fails: certificate is not valid / listener creation fails on the ACM certificate | `foundation`'s certificate is still `PENDING_VALIDATION`. Re-check the precondition in step 1 with `aws acm describe-certificate` and wait for `ISSUED` before planning again. |
 | Apply fails: *target group does not have an associated load balancer* | The `depends_on = [aws_lb_listener.https]` in `ecs.tf` was removed. |
 | Service never stabilises; tasks stop immediately | Almost always the ARM64/image mismatch — the image is built `linux/arm64` only. Check the stopped task's reason in the console. |
 | `/health` 503 from the ALB | No healthy targets. Check the task is running and the security group path from ALB to task on port 8080 (`local.network.container_port`). |

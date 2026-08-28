@@ -28,9 +28,14 @@ data "terraform_remote_state" "network" {
 # deploys the digest, so there is exactly one identifier for "what is running"
 # and /version cannot disagree with it. Plan §D3.
 #
-# This is the one data source in the layer that reaches AWS at plan time, and
-# it fails loudly when var.image_tag is not in the registry — which is better
-# than applying a task definition ECS cannot pull.
+# This is NOT the one data source in the layer that reaches AWS at plan
+# time — the two terraform_remote_state blocks above read the S3 backend at
+# plan time as well. The distinction that actually matters is narrower: this
+# is the only data source that reaches an AWS *service* API rather than the
+# state backend, and correspondingly the only one whose failure means "the
+# image you asked for is not in the registry" rather than "state could not be
+# read." It fails loudly when var.image_tag is not in the registry — which is
+# better than applying a task definition ECS cannot pull.
 data "aws_ecr_image" "api" {
   repository_name = local.ecr_repository_name
   image_tag       = var.image_tag

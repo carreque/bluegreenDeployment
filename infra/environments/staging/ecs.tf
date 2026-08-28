@@ -140,11 +140,37 @@ resource "aws_ecs_service" "api" {
     container_port   = local.container_port
   }
 
-  # Load-bearing, and not inferable from the graph. ECS refuses to create a
-  # service whose target group is not yet attached to a load balancer, and
-  # Terraform sees only the service's reference to the target group — not the
-  # listener that attaches it. Without this the first apply fails with
-  # "target group does not have an associated load balancer" and the second
-  # succeeds, which is the most confusing kind of intermittent failure.
-  depends_on = [aws_lb_listener.https]
+  # Load-bearing, and not inferable from the graph, for two independent
+  # reasons.
+  #
+  # First: ECS refuses to create a service whose target group is not yet
+  # attached to a load balancer, and Terraform sees only the service's
+  # reference to the target group — not the listener that attaches it.
+  # Without aws_lb_listener.https here, the first apply fails with "target
+  # group does not have an associated load balancer" and the second succeeds,
+  # which is the most confusing kind of intermittent failure.
+  #
+  # Second: the task definition above references aws_iam_role.task_exec.arn
+  # and aws_iam_role.task.arn — the roles — but the permissions the running
+  # task actually needs live in aws_iam_role_policy.task_exec and
+  # aws_iam_role_policy.task. Nothing else in this file references those
+  # policy resources, so without naming them here they are leaf nodes in the
+  # graph and Terraform is free to create them in parallel with the service
+  # rather than before it. IAM is eventually consistent even after
+  # PutRolePolicy returns, so a task can start pulling its image or writing
+  # its logs before the policy that permits it has actually propagated — the
+  # first task can fail CannotPullContainerError ("not authorized to perform:
+  # ecr:GetAuthorizationToken"), or start and silently drop its logs. Worse,
+  # deployment_circuit_breaker below has rollback = true but no previous task
+  # set to roll back to on a first apply, and there is no
+  # wait_for_steady_state, so terraform apply reports SUCCESS while the
+  # service never actually stabilises. Listing both policies here does not
+  # guarantee IAM has propagated by the time the service is created, but it
+  # does guarantee the roles are fully populated first, which is the ordering
+  # within Terraform's own control.
+  depends_on = [
+    aws_lb_listener.https,
+    aws_iam_role_policy.task_exec,
+    aws_iam_role_policy.task,
+  ]
 }
