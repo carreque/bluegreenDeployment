@@ -289,6 +289,28 @@ The `query` targets the LSI (`IndexName: created_at-index`). In IAM, an index is
 
 **Consequence:** the task role's policy grants four actions on three ARNs — both tables and `${transactions_arn}/index/created_at-index`. Omitting the third is the trap: every endpoint works, and only `GET /api/transactions` fails, with an `AccessDeniedException` at runtime that no plan, no apply and no health check would reveal. Task 2 asserts the index ARN is present.
 
+> **Amended in Phase 5 (2026-08-28), during Task 2's review.** This finding is
+> **wrong**. It was gathered with a grep over `app/src/bgd/repository/dynamodb.py`
+> whose alternation did not include `transact_write_items`, so it missed a call.
+> `post_transaction` (`dynamodb.py:164`) calls `transact_write_items` with a `Put`
+> on the transactions table and an **`Update`** on the accounts table
+> (`SET balance_minor = balance_minor + :delta`). The real granted set is **six**
+> actions — `GetItem`, `PutItem`, `Query`, `Scan`, `UpdateItem`,
+> `TransactWriteItems` — not four, and the missing pair guards the application's
+> primary write path rather than one read endpoint: shipped as originally
+> written, this finding would have broken `POST /api/transactions` with
+> `AccessDenied` in production, which is strictly worse than the LSI trap this
+> finding was written to catch. `UpdateItem` is unambiguously required by the
+> `Update` item; `TransactWriteItems` is a confirmed real IAM action in
+> botocore's DynamoDB model, and whether AWS additionally checks the compound
+> action (rather than only the per-item actions it wraps) could not be settled
+> offline, so it is granted rather than omitted — inert at worst, breaking at
+> best if wrong to omit. See the [local verification
+> record](./2026-08-28-local-verification.md)'s note on the runbook step this
+> could not, in the end, fully settle either. Task 2's tests
+> (`tests/data_and_iam.tftest.hcl`) assert the six-action set and the
+> `UpdateItem` grant separately.
+
 ### F7 — Provider 6.61 carries the full Phase 6 surface, confirmed against the installed binary
 
 Checked with `terraform providers schema -json`, so this is the schema actually in `.terraform.lock.hcl`, not a changelog claim.
@@ -315,6 +337,17 @@ Restating the ones this layer breaks if it gets them wrong, with the symptom att
 | ALB and target group names ≤ 32 characters | Apply fails with an unhelpful error. `bgd-us-east-1-staging-alb` is 25; `bgd-us-east-1-staging-api` is 25. |
 | Log group name uses slashes | A hyphenated name creates a second, silently empty group (convention §4). |
 | `depends_on = [aws_lb_listener.https]` on the service | ECS refuses to create a service whose target group is not yet attached to a load balancer. Terraform's implicit graph does not order this, because the service references the target group and not the listener. |
+
+> **Amended in Phase 5 (2026-08-28).** The LSI row above is correct as far as
+> it goes but understates the blast radius, because it was written against
+> F6's now-corrected claim. "Every other endpoint works" is not quite true:
+> the task role also needs `dynamodb:UpdateItem` and `dynamodb:TransactWriteItems`
+> for `post_transaction`'s compound write, and omitting *those* breaks
+> `POST /api/transactions` — the primary write path, not a secondary read —
+> with `AccessDenied`, on the first call rather than only the LSI-dependent
+> list endpoint. See F6's amendment above. The symptom for the LSI omission
+> specifically is unchanged: `GET /api/transactions` fails, everything else
+> that does not touch the index still works.
 
 ---
 
@@ -1993,6 +2026,24 @@ run "the_consumed_surface_is_present_and_correctly_shaped" {
   }
 }
 ```
+
+> **Amended in Phase 5 (2026-08-28), during Task 7's review.** The test code
+> above is incomplete: `outputs.tf` (Step 3, below) declares **nine** outputs,
+> and the code block above asserts only **eight** — it never references
+> `output.task_definition_family`. That is a hole in a test file whose stated
+> purpose, two paragraphs up, is "outputs are an interface; interfaces get
+> tests," and this specific output matters: a later phase registers new task
+> definition revisions against the family and a rollback names a revision of
+> it, so an unguarded rename would break exactly the consumer this test exists
+> to protect. Fixed during implementation — the committed
+> `tests/outputs.tftest.hcl` carries a ninth assertion:
+>
+> ```hcl
+>   assert {
+>     condition     = output.task_definition_family == "bgd-us-east-1-staging-api"
+>     error_message = "task_definition_family is what later phases register revisions against and roll back by"
+>   }
+> ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
