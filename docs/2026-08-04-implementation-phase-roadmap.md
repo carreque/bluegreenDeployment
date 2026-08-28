@@ -297,6 +297,43 @@ Deliberately the simpler of the two environments — rolling deployments, one ta
 
 **Exit criteria:** `https://staging-api.carloscloudengineer.com/health`, `/ready` and `/version` all respond correctly over TLS, serving the seeded image.
 
+> **Amended in Phase 5 (2026-08-28).** The layer built more than this task
+> list names, all decided and recorded in [the Phase 5
+> plan](./phases/phase5/2026-08-28-phase-05-implementation-plan.md)'s §0.1:
+>
+> - **A deployment circuit breaker, with rollback** (D8). Not named above. A
+>   task that never reaches a healthy state rolls staging back to the previous
+>   task definition instead of retrying forever — the mechanism for the
+>   roadmap's stated job of failing fast, and it gives Phase 8's pipeline a
+>   meaningful staging gate with no new code of its own.
+> - **`containerInsights` explicitly disabled, not omitted** (D7). Written as
+>   `setting { name = "containerInsights", value = "disabled" }` rather than
+>   left out, so the choice is visible in the code and the plan diff instead
+>   of being an absence someone has to notice. Phase 9 owns observability and
+>   turning this on now would bill per custom metric on the layer whose whole
+>   point is being cheap to leave running.
+> - **`scripts/smoke.sh`** (D4). A shell script, not a pytest suite and not
+>   runbook prose, so Phase 8's CodeBuild runs the identical command used
+>   locally without installing a Python virtualenv just to smoke-test a
+>   service. It asserts more than "200 OK": `/version`'s `image_digest` must
+>   equal the digest Terraform recorded, which is what makes it a deployment
+>   check rather than a liveness check.
+> - **The image pinned by digest, resolved from a tag through
+>   `data.aws_ecr_image`** (D3). Not two hand-maintained variables that could
+>   silently disagree — `var.image_tag` names a tag, the data source resolves
+>   it to a digest, and the task definition and `BGD_IMAGE_DIGEST` both read
+>   the same resolved value, so `/version` cannot report something that was
+>   never deployed.
+>
+> **The exit criterion above is not met by the branch alone.** The branch's
+> own gate is `make tf-check`; the criterion is met when [the
+> runbook](./runbooks/phase-05-staging.md) is executed. Same note Phases 3 and
+> 4 carry. See [the local verification
+> record](./phases/phase5/2026-08-28-local-verification.md).
+>
+> §2's branch table needed no amendment: row 5 already reads
+> `feat/Phase5_Staging`, and that is the branch used. Same as Phase 3's note.
+
 ### Phase 6 — Production environment with native blue/green
 
 The technical centre of the project.

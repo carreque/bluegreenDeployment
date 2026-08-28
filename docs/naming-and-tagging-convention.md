@@ -218,6 +218,26 @@ Phase 3 is the one with a deadline attached, because that is when the
 non-retroactive window opens. It is also the phase that already carries the
 CodeConnections authorisation, so both manual steps belong in the same runbook.
 
+> **Amended in Phase 5 (2026-08-28).** The Phase 5 half of the row above is
+> done: `aws_ecs_service.api.propagate_tags = "SERVICE"` in
+> `infra/environments/staging/ecs.tf`, asserted by
+> `tests/compute.tftest.hcl`'s `the_service_runs_private_tasks_with_attributable_tags`
+> run. `propagate_tags` is `optional` and **not `computed`**, so `terraform
+> plan` cannot confirm it landed on a running task — only the AWS CLI can, and
+> this document previously stated the requirement without saying how to
+> confirm it. The command, from [the Phase 5
+> runbook](./runbooks/phase-05-staging.md)'s tag-verification step:
+>
+> ```bash
+> aws ecs list-tasks --cluster bgd-us-east-1-staging-cluster \
+>   --query 'taskArns[0]' --output text
+> aws ecs describe-tasks --cluster bgd-us-east-1-staging-cluster \
+>   --tasks <arn> --include TAGS --query 'tasks[0].tags'
+> ```
+>
+> Expected: all four convention tags, with `environment = staging`. Phase 6
+> repeats this against its own cluster and service names.
+
 ---
 
 ## 7. Worked example

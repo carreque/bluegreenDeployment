@@ -432,6 +432,13 @@ Single GitHub monorepo:
 | Fargate (staging 1 task, prod 2 tasks, 0.25 vCPU / 0.5 GB) | $27 |
 | ECR, DynamoDB on-demand, CloudWatch, Route 53, S3, public IPv4 | ~$15 |
 
+> **Amended in Phase 5 (2026-08-28).** Nothing here is contradicted, so this
+> amendment is small: staging's half of the combined `$27` Fargate line is one
+> 0.25 vCPU / 0.5 GB task running on **ARM64** (Phase 2 builds `linux/arm64`
+> only), and this table did not price ARM64 specifically. Graviton Fargate is
+> cheaper than x86 at the same size, so the $27 figure is conservative for
+> staging's share rather than wrong.
+
 ---
 
 ## 11. Known risks and trade-offs
