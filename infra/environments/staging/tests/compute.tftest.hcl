@@ -175,3 +175,69 @@ run "the_cluster_is_named_by_convention_and_insights_is_an_explicit_choice" {
     error_message = "container insights must be explicitly disabled rather than omitted, so the choice is visible (plan §D7)"
   }
 }
+
+run "the_service_runs_private_tasks_with_attributable_tags" {
+  command = apply
+
+  assert {
+    condition     = aws_ecs_service.api.name == "bgd-us-east-1-staging-api"
+    error_message = "service name breaks the naming convention"
+  }
+
+  # Not decoration. propagate_tags is optional and NOT computed in the provider
+  # schema, so omitting it sends nothing, the ECS default of no propagation
+  # applies, every running task is untagged, and terraform plan stays clean.
+  # Fargate is the largest cost line after the ALBs and NAT. Convention §6.1.
+  assert {
+    condition     = aws_ecs_service.api.propagate_tags == "SERVICE"
+    error_message = "without propagate_tags every running task is untagged and Fargate cost cannot be attributed"
+  }
+
+  assert {
+    condition     = one(aws_ecs_service.api.network_configuration).subnets == toset(["subnet-0mockprva", "subnet-0mockprvb"])
+    error_message = "tasks belong in the private subnets, reaching the internet through the NAT"
+  }
+
+  assert {
+    condition     = !one(aws_ecs_service.api.network_configuration).assign_public_ip
+    error_message = "a public IP on a private-subnet task both costs money and defeats the point of the subnet"
+  }
+
+  assert {
+    condition     = one(aws_ecs_service.api.network_configuration).security_groups == toset(["sg-0mocktaskstaging"])
+    error_message = "the service must use the staging task security group, not prod's"
+  }
+}
+
+run "the_service_deploys_by_rolling_and_rolls_itself_back" {
+  command = apply
+
+  # ROLLING is also the API default, so this line changes nothing on its own.
+  # It is written because the single word is the visible difference between this
+  # layer and Phase 6's, where it becomes BLUE_GREEN.
+  assert {
+    condition     = one(aws_ecs_service.api.deployment_configuration).strategy == "ROLLING"
+    error_message = "staging deploys by rolling update; blue/green is Phase 6 and production only"
+  }
+
+  # Staging's job in the roadmap is to fail fast. Without the circuit breaker a
+  # task that never becomes healthy is retried indefinitely, consuming Fargate
+  # capacity, and the failure is visible only to someone reading service events.
+  assert {
+    condition = (
+      one(aws_ecs_service.api.deployment_circuit_breaker).enable &&
+      one(aws_ecs_service.api.deployment_circuit_breaker).rollback
+    )
+    error_message = "the circuit breaker must be enabled with rollback (plan §D8)"
+  }
+
+  assert {
+    condition     = one(aws_ecs_service.api.load_balancer).container_name == "api"
+    error_message = "the load_balancer block's container_name must match the task definition's container name"
+  }
+
+  assert {
+    condition     = aws_ecs_service.api.desired_count == 1
+    error_message = "staging runs one task by design"
+  }
+}

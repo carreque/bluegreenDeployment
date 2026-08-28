@@ -88,3 +88,63 @@ resource "aws_ecs_task_definition" "api" {
     }
   ])
 }
+
+resource "aws_ecs_service" "api" {
+  name            = "${local.env_prefix}-api"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.api.arn
+  desired_count   = var.desired_count
+  launch_type     = "FARGATE"
+
+  # Both mandatory for cost attribution, and neither is computed: omitting
+  # propagate_tags sends nothing and ECS defaults to no propagation, leaving
+  # every running task untagged while terraform plan stays clean. SERVICE
+  # rather than TASK_DEFINITION because Phase 8 revises the task definition on
+  # every image push, which makes its tags the less reliable source.
+  # Convention §6.1.
+  propagate_tags          = "SERVICE"
+  enable_ecs_managed_tags = true
+
+  # The application starts in a second or two, but the first health check is
+  # scheduled immediately. Sixty seconds of grace stops a cold start being
+  # counted as a failure and rolled back by the circuit breaker below.
+  health_check_grace_period_seconds = 60
+
+  # ROLLING is also the API default. It is stated because this one word is the
+  # difference between this layer and Phase 6's, and a difference that matters
+  # should be visible rather than implied by an absence. Plan §F7.
+  deployment_configuration {
+    strategy = "ROLLING"
+  }
+
+  # Staging's stated job is to fail fast. Without this, a task that never
+  # becomes healthy is retried forever; with it, the service reverts to the
+  # previous task definition and the failure is a finished event rather than an
+  # ongoing one. The trade accepted is that the broken task set is gone before
+  # it can be inspected — the log group keeps what the container printed, which
+  # is the part worth reading. Plan §D8.
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    subnets          = local.network.private_subnet_ids
+    security_groups  = [local.network.task_security_group_ids[local.environment]]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api.arn
+    container_name   = local.container_name
+    container_port   = local.container_port
+  }
+
+  # Load-bearing, and not inferable from the graph. ECS refuses to create a
+  # service whose target group is not yet attached to a load balancer, and
+  # Terraform sees only the service's reference to the target group — not the
+  # listener that attaches it. Without this the first apply fails with
+  # "target group does not have an associated load balancer" and the second
+  # succeeds, which is the most confusing kind of intermittent failure.
+  depends_on = [aws_lb_listener.https]
+}
