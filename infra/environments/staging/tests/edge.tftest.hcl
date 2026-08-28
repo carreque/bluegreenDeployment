@@ -174,3 +174,33 @@ run "http_redirects_and_https_terminates_with_the_foundation_certificate" {
     error_message = "staging serves on 443 only; the 8443 test listener is Phase 6 and production-only"
   }
 }
+
+run "the_hostname_aliases_this_environments_load_balancer" {
+  command = apply
+
+  # Read from foundation rather than composed here. foundation owns the domain
+  # and already derives this name; composing "staging-api." + a domain variable
+  # in this layer would be a second place for the hostname to be spelled.
+  assert {
+    condition     = aws_route53_record.api.name == "staging-api.carloscloudengineer.com"
+    error_message = "the record must use the hostname foundation derives, not one composed here"
+  }
+
+  assert {
+    condition     = aws_route53_record.api.zone_id == "Z0MOCKZONEID000"
+    error_message = "the record belongs in the hosted zone foundation owns"
+  }
+
+  # An alias A record, not a CNAME. An ALB has no stable address, and a zone
+  # apex cannot hold a CNAME — alias records are the only shape that works for
+  # both, and they cost nothing to resolve.
+  assert {
+    condition     = aws_route53_record.api.type == "A"
+    error_message = "an alias A record is what fronts an ALB; a CNAME would not work at an apex and costs a lookup"
+  }
+
+  assert {
+    condition     = one(aws_route53_record.api.alias).name == "mock-alb-123.us-east-1.elb.amazonaws.com"
+    error_message = "the alias must target this layer's own load balancer"
+  }
+}
