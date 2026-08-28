@@ -21,6 +21,22 @@ ROOT="$(repo_root)"
 INFRA="$ROOT/infra"
 PLUGINS="$INFRA/.tflint.d"
 
+# Layer names to paths, relative to infra/. The makefile's TF_LAYERS passes bare
+# names — bootstrap, foundation, network, staging, prod — while the discovery
+# branch below already yields relative paths, so both forms must work.
+#
+# staging and prod live one level deeper, at infra/environments/<layer>. This is
+# the same mapping scripts/tf.sh and scripts/teardown.sh each carry, and its
+# absence here was invisible until Phase 5 put a layer below infra/ for the first
+# time: tflint failed with "chdir staging: no such file or directory" the moment
+# staging entered TF_LAYERS. checkov was never affected — it scans infra/ whole.
+layer_path() {
+  case "$1" in
+    staging | prod) echo "environments/$1" ;;
+    *) echo "$1" ;;
+  esac
+}
+
 TFLINT="ghcr.io/terraform-linters/tflint@sha256:cef181224b4a9cea521d8f785d50957ea3215b449e2d97e7793f222e2808d188"
 CHECKOV="bridgecrew/checkov@sha256:c5fb7154bed784fc19a69779c308fddba564f19a37c25d306c0e9765c4f0aa1d"
 
@@ -63,8 +79,9 @@ tflint_run --init >/dev/null
 failures=0
 
 for layer in "${LAYERS[@]}"; do
+  path="$(layer_path "$layer")"
   info "tflint — $layer"
-  if tflint_run --chdir="$layer" --format=compact; then
+  if tflint_run --chdir="$path" --format=compact; then
     ok "$layer clean"
   else
     failures=$((failures + 1))
