@@ -170,7 +170,7 @@ run-image: build local-tables ## Run the built image against DynamoDB Local on :
 # staging (5), prod (6).
 # ---------------------------------------------------------------------------
 
-TF_LAYERS := bootstrap foundation
+TF_LAYERS := bootstrap foundation network
 
 .PHONY: tf-fmt
 tf-fmt: ## Format every Terraform file in place
@@ -210,6 +210,17 @@ apply-%: FORCE
 seed-ecr: ## Push the built image into ECR (needs an AWS session)
 	@./scripts/seed-ecr.sh
 
+# ---------------------------------------------------------------------------
+# Phase 4 — network
+# ---------------------------------------------------------------------------
+
+.PHONY: teardown
+teardown: ## Destroy prod, then staging, then network (needs an AWS session)
+	@./scripts/teardown.sh
+
+.PHONY: verify-network
+verify-network: ## Prove a private subnet egresses through the NAT (needs an AWS session)
+	@./scripts/verify-network.sh
+
 # PLANNED: smoke          Smoke test an environment over TLS (Phase 5)
-# PLANNED: teardown       Destroy prod then staging then network (Phase 10)
 # PLANNED: rebuild        Apply network then staging then prod (Phase 10)

@@ -1,0 +1,9 @@
+# Every variable has a default correct for this project; terraform.tfvars is
+# gitignored. The two worth knowing about:
+#
+#   vpc_cidr = "10.0.0.0/16"
+#     Changing it after the first apply replaces the VPC and everything in it.
+#
+#   az_count = 2
+#     Two is the floor an ALB requires. Raising it adds subnets and route
+#     tables but still only one NAT Gateway — see the plan's §0.1.

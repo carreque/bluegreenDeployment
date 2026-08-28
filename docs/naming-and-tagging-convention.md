@@ -152,6 +152,14 @@ provider "aws" {
 
 A resource-level `tags` block merges with these, and on key collision the resource-level value wins. Use that only to add tags, never to override the four above.
 
+> **Amended in Phase 4 (2026-08-26).** One bounded exception: **resources that
+> incur no cost may override `environment`.** The rule above exists to stop a
+> single cost line being split across two spellings of a key — a reason that
+> does not apply to something that generates no cost line at all. It is used by
+> the four per-environment security groups in `network`, which are created by a
+> `shared` layer but belong to `staging` and `prod`. Anything billable still
+> takes `environment` from the provider's `default_tags` and nowhere else.
+
 ### Two gaps `default_tags` does not cover
 
 1. **ECS tasks do not inherit them.** The service must set `propagate_tags = "SERVICE"` (or `"TASK_DEFINITION"`), otherwise running tasks appear untagged and Fargate cost — the largest line item after the ALBs and NAT — cannot be attributed.
