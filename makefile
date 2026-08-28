@@ -170,7 +170,7 @@ run-image: build local-tables ## Run the built image against DynamoDB Local on :
 # staging (5), prod (6).
 # ---------------------------------------------------------------------------
 
-TF_LAYERS := bootstrap foundation network
+TF_LAYERS := bootstrap foundation network staging
 
 .PHONY: tf-fmt
 tf-fmt: ## Format every Terraform file in place
@@ -222,5 +222,16 @@ teardown: ## Destroy prod, then staging, then network (needs an AWS session)
 verify-network: ## Prove a private subnet egresses through the NAT (needs an AWS session)
 	@./scripts/verify-network.sh
 
-# PLANNED: smoke          Smoke test an environment over TLS (Phase 5)
+# ---------------------------------------------------------------------------
+# Phase 5 — staging
+# ---------------------------------------------------------------------------
+
+# A pattern rule, like plan-% and apply-%, so Phase 6 gets `make smoke-prod`
+# with no edit here. Same FORCE dependency and the same reason: a pattern rule
+# cannot be declared .PHONY, and without it this would silently stop running
+# the day a file named smoke-staging appears.
+# LISTED: smoke-ENV      Smoke test an environment over TLS (needs an AWS session)
+smoke-%: FORCE
+	@./scripts/smoke.sh $*
+
 # PLANNED: rebuild        Apply network then staging then prod (Phase 10)
