@@ -121,3 +121,96 @@ run "the_tables_match_the_application_schema" {
     error_message = "deletion protection would make terraform destroy fail and break make teardown"
   }
 }
+
+# These assertions are only possible because the policies are built with
+# jsonencode rather than aws_iam_policy_document. mock_provider mocks that data
+# source — it is the AWS provider's, despite being a pure local computation —
+# and returns a random string, so a policy built through it asserts nothing
+# under test. See the plan's F1 and D9.
+
+run "the_task_role_grants_exactly_what_the_application_calls" {
+  command = apply
+
+  # dynamodb.py calls put_item, get_item, scan and query. Nothing else — no
+  # update_item, no delete_item, and deliberately no describe_table, because
+  # ping() uses a data-plane read instead. Plan §F6.
+  assert {
+    condition = toset(jsondecode(aws_iam_role_policy.task.policy).Statement[0].Action) == toset([
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+    ])
+    error_message = "the task role grants a different action set than app/src/bgd/repository/dynamodb.py calls"
+  }
+
+  # The trap this asserts against: an IAM index is a distinct ARN. Grant only
+  # the two table ARNs and every endpoint works except GET /api/transactions,
+  # which fails AccessDenied at runtime — invisible to plan, apply and the ALB
+  # health check. Plan §F6.
+  assert {
+    condition = contains(
+      jsondecode(aws_iam_role_policy.task.policy).Statement[0].Resource,
+      "${aws_dynamodb_table.transactions.arn}/index/created_at-index"
+    )
+    error_message = "the LSI index ARN is missing; listing transactions would fail AccessDenied at runtime"
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_iam_role_policy.task.policy).Statement) == 1
+    error_message = "the task role should grant one statement; anything else is scope creep"
+  }
+}
+
+run "the_execution_role_can_pull_only_this_projects_registry" {
+  command = apply
+
+  assert {
+    condition = contains([
+      for s in jsondecode(aws_iam_role_policy.task_exec.policy).Statement :
+      s.Resource if s.Sid == "EcrPullThisRepositoryOnly"
+    ], "arn:aws:ecr:us-east-1:590184028094:repository/bgd-us-east-1-api")
+    error_message = "the image pull must be scoped to the project's repository, not to every repository in the account"
+  }
+
+  # GetAuthorizationToken is the one action that genuinely cannot be scoped —
+  # it grants a registry-wide token and AWS defines no resource for it. It is
+  # isolated in its own statement so that the wildcard is visibly attached to
+  # that action alone rather than to the pull actions as well.
+  assert {
+    condition = length([
+      for s in jsondecode(aws_iam_role_policy.task_exec.policy).Statement :
+      s if s.Resource == "*"
+    ]) == 1
+    error_message = "exactly one statement may use a wildcard resource, and it must be the ECR auth token"
+  }
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.task_exec.policy).Statement :
+      s.Sid == "EcrAuthToken" && s.Resource == "*"
+    ])
+    error_message = "the wildcard statement must be the ECR auth token and nothing else"
+  }
+}
+
+run "both_roles_are_assumable_only_by_ecs_tasks_in_this_account" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      jsondecode(aws_iam_role.task.assume_role_policy).Statement[0].Principal.Service == "ecs-tasks.amazonaws.com",
+      jsondecode(aws_iam_role.task_exec.assume_role_policy).Statement[0].Principal.Service == "ecs-tasks.amazonaws.com",
+    ])
+    error_message = "only the ECS tasks service principal may assume these roles"
+  }
+
+  # Without the account condition these trust policies are confused-deputy
+  # shaped: any ECS task anywhere could assume them if it obtained the ARN.
+  assert {
+    condition = jsondecode(
+      aws_iam_role.task.assume_role_policy
+    ).Statement[0].Condition.StringEquals["aws:SourceAccount"] == "590184028094"
+    error_message = "the trust policy must be conditioned on this account"
+  }
+}

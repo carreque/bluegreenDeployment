@@ -1,0 +1,112 @@
+# Two of design §8.1's six roles. Both are created here rather than in
+# foundation because a role's policy cannot be scoped to resources that do not
+# exist yet — the Phase 3 §D2 rule — and the tables and log group are this
+# layer's.
+#
+# Policies are built with jsonencode rather than aws_iam_policy_document.
+# mock_provider mocks every data source the AWS provider owns, and the policy
+# document generator is one of them despite being a pure local computation: it
+# returns a random string under test and aws_iam_role rejects it client-side.
+# jsonencode keeps the JSON real under mocks, which is what lets the tests
+# assert what these policies actually grant. See the plan's F1 and D9.
+
+locals {
+  # Shared by both roles: identical trust, different permissions. The account
+  # condition is what stops these being confused-deputy shaped — without it any
+  # ECS task anywhere could assume them given the ARN.
+  ecs_tasks_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Condition = { StringEquals = { "aws:SourceAccount" = var.account_id } }
+    }]
+  })
+}
+
+# --- execution role: what the ECS agent does on the task's behalf -----------
+#
+# Assumed by ECS itself, before the container starts, to pull the image and
+# create the log stream. The application code never holds these permissions.
+
+resource "aws_iam_role" "task_exec" {
+  name               = "${local.env_prefix}-task-exec-role"
+  assume_role_policy = local.ecs_tasks_assume_role_policy
+}
+
+resource "aws_iam_role_policy" "task_exec" {
+  name = "${local.env_prefix}-task-exec-policy"
+  role = aws_iam_role.task_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # The one action that genuinely cannot be scoped: it returns a
+        # registry-wide token and AWS defines no resource type for it. Isolated
+        # in its own statement so the wildcard is visibly attached to this
+        # action alone.
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPullThisRepositoryOnly"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = local.foundation.ecr_repository_arn
+      },
+      {
+        # CreateLogGroup is deliberately absent. Terraform owns the group, and
+        # granting the agent permission to create one would let a typo in the
+        # log configuration silently produce a second, unmanaged group instead
+        # of failing.
+        Sid      = "WriteThisServicesLogsOnly"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.api.arn}:*"
+      },
+    ]
+  })
+}
+
+# --- task role: what the application code itself can do ---------------------
+
+resource "aws_iam_role" "task" {
+  name               = "${local.env_prefix}-task-role"
+  assume_role_policy = local.ecs_tasks_assume_role_policy
+}
+
+resource "aws_iam_role_policy" "task" {
+  name = "${local.env_prefix}-task-policy"
+  role = aws_iam_role.task.id
+
+  # Exactly the four calls app/src/bgd/repository/dynamodb.py makes, on exactly
+  # the three ARNs it touches. The index ARN is the one easy to omit: an IAM
+  # index is a distinct resource, and without it every endpoint works except
+  # GET /api/transactions, which fails AccessDenied at runtime. Plan §F6.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "DynamoDbDataPlane"
+      Effect = "Allow"
+      Action = [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+      ]
+      Resource = [
+        aws_dynamodb_table.accounts.arn,
+        aws_dynamodb_table.transactions.arn,
+        "${aws_dynamodb_table.transactions.arn}/index/created_at-index",
+      ]
+    }]
+  })
+}
