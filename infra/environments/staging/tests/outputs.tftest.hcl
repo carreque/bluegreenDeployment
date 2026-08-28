@@ -95,6 +95,14 @@ run "the_consumed_surface_is_present_and_correctly_shaped" {
     error_message = "Phase 8's deploy action addresses the service by cluster and service name"
   }
 
+  # A later phase registers new task definition revisions against this family,
+  # and a manual rollback names a revision of it. Asserted for the same reason
+  # as the two above: this is a name another phase depends on by string.
+  assert {
+    condition     = output.task_definition_family == "bgd-us-east-1-staging-api"
+    error_message = "task_definition_family is what later phases register revisions against and roll back by"
+  }
+
   assert {
     condition     = output.log_group_name == "/bgd/us-east-1/staging/api"
     error_message = "the runbook and Phase 9 both read logs by this name"
