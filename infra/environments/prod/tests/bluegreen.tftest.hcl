@@ -43,6 +43,13 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:ecs:us-east-1:590184028094:task-definition/mock:1" }
   }
 
+  # Added because omitting it produced a hard error, not because it looked tidy:
+  # aws_lb_listener_rule validates its listener_arn client-side, and
+  # mock_provider's random eight-character string is not an ARN.
+  mock_resource "aws_lb_listener" {
+    defaults = { arn = "arn:aws:elasticloadbalancing:us-east-1:590184028094:listener/app/mock/0123456789abcdef/aaaaaaaaaaaaaaaa" }
+  }
+
   mock_data "aws_ecr_image" {
     defaults = { image_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111" }
   }
