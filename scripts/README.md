@@ -17,6 +17,16 @@ longer than three lines, or needing a conditional or a loop, lives here.
 | `tf.sh` | 3 — per-layer terraform driver; `-backend=false` for fmt, validate and test |
 | `lint-infra.sh` | 3 — tflint and checkov from digest-pinned containers |
 | `seed-ecr.sh` | 3 — copy the Phase 2 OCI archive into ECR, digest verified |
+| `install-terraform.sh` | 7 — the pinned Terraform install, for CodeBuild only |
+| `pipeline-terraform.sh` | 7 — the pipeline's plan/apply driver, scope gate and plan summary |
+
+The last two are the only scripts here that no `make` target calls. They are
+entry points for CodeBuild, invoked by the buildspecs under `pipelines/`, and
+they are in this directory rather than in that one for the reason the makefile
+gives for its own three-line rule: a buildspec cannot be run locally, so logic
+that lives in one is logic nobody can test before merging it.
+`pipeline-terraform.sh` still calls `tf.sh` for the layer-name-to-directory
+mapping rather than carrying a fourth copy of it.
 
 `lib/common.sh` also owns `image_build_identity`, which derives the version, git
 SHA and both timestamps for a build. It is shared rather than duplicated because

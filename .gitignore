@@ -126,3 +126,7 @@ Thumbs.db
 tmp/
 scratch/
 *.local
+
+# Written by scripts/pipeline-terraform.sh for the buildspec to source. A
+# CodeBuild-only file that a local debugging run also produces.
+plan-vars.env
