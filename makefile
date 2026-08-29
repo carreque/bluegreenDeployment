@@ -174,11 +174,13 @@ run-image: build local-tables ## Run the built image against DynamoDB Local on :
 # logged in. Only plan and apply reach the account. See
 # docs/phases/phase3/2026-08-24-phase-03-implementation-plan.md §F2.
 #
-# Add a layer here as the phase that creates it lands: network (4),
-# staging (5), prod (6).
+# Every layer is listed: network (4), staging (5) and prod (6) each joined as
+# the phase that created it landed. scripts/lint-infra.sh and scripts/tf.sh
+# already carry the layer-name-to-directory mapping, so this list is the only
+# place a new layer has to be declared.
 # ---------------------------------------------------------------------------
 
-TF_LAYERS := bootstrap foundation network staging
+TF_LAYERS := bootstrap foundation network staging prod
 
 .PHONY: tf-fmt
 tf-fmt: ## Format every Terraform file in place

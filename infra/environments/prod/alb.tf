@@ -50,6 +50,7 @@ resource "aws_lb" "this" {
 # on. tests/edge.tftest.hcl asserts every shared attribute matches.
 
 resource "aws_lb_target_group" "blue" {
+  # checkov:skip=CKV_AWS_378:HTTP between the ALB and the task, which is the design and not an oversight — TLS terminates at the load balancer, and the hop behind it is inside the VPC, to a private subnet, over a security group that accepts traffic from the ALB's group alone (Phase 4 §D3). Worth recording WHY this fires here and not on staging's identically-configured target group: staging's HTTPS listener forwards to its target group directly, so checkov's graph sees a TLS listener in front of it. This layer's listeners default to a fixed 503 and reach the groups through aws_lb_listener_rule instead — because advanced_configuration takes rule ARNs (Phase 0 A7) — and the check cannot follow that edge. The protocol is the same in both layers; only checkov's visibility differs.
   name        = "${local.env_prefix}-api-blue"
   port        = local.container_port
   protocol    = "HTTP"
@@ -77,6 +78,7 @@ resource "aws_lb_target_group" "blue" {
 }
 
 resource "aws_lb_target_group" "green" {
+  # checkov:skip=CKV_AWS_378:HTTP between the ALB and the task, which is the design and not an oversight — TLS terminates at the load balancer, and the hop behind it is inside the VPC, to a private subnet, over a security group that accepts traffic from the ALB's group alone (Phase 4 §D3). Worth recording WHY this fires here and not on staging's identically-configured target group: staging's HTTPS listener forwards to its target group directly, so checkov's graph sees a TLS listener in front of it. This layer's listeners default to a fixed 503 and reach the groups through aws_lb_listener_rule instead — because advanced_configuration takes rule ARNs (Phase 0 A7) — and the check cannot follow that edge. The protocol is the same in both layers; only checkov's visibility differs.
   name        = "${local.env_prefix}-api-green"
   port        = local.container_port
   protocol    = "HTTP"

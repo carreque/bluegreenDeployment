@@ -286,12 +286,12 @@ run "each_serving_listener_carries_a_rule_and_they_start_on_opposite_colours" {
   # The initial assignment. ECS swaps them from here, which is why nothing else
   # in this layer may assume blue is production after the first deployment.
   assert {
-    condition = one(aws_lb_listener_rule.production.action).target_group_arn == aws_lb_target_group.blue.arn
+    condition     = one(aws_lb_listener_rule.production.action).target_group_arn == aws_lb_target_group.blue.arn
     error_message = "the :443 rule forwards to blue at creation; ECS swaps it from there"
   }
 
   assert {
-    condition = one(aws_lb_listener_rule.test.action).target_group_arn == aws_lb_target_group.green.arn
+    condition     = one(aws_lb_listener_rule.test.action).target_group_arn == aws_lb_target_group.green.arn
     error_message = "the :8443 rule forwards to green at creation, so the test listener starts on the idle colour"
   }
 

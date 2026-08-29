@@ -506,8 +506,8 @@ run "every_alarm_can_evaluate_inside_a_five_minute_bake" {
         aws_cloudwatch_metric_alarm.p95_latency,
         aws_cloudwatch_metric_alarm.unhealthy["blue"],
         aws_cloudwatch_metric_alarm.unhealthy["green"],
-      # null when unset, which is the shape a correct config produces; an
-      # empty set is accepted too so this cannot be "fixed" into a false pass.
+        # null when unset, which is the shape a correct config produces; an
+        # empty set is accepted too so this cannot be "fixed" into a false pass.
       ] : coalesce(try(length(alarm.alarm_actions), 0), 0) == 0 && coalesce(try(length(alarm.ok_actions), 0), 0) == 0
     ])
     error_message = "no alarm carries actions; Phase 9 owns notification and attaches to these same alarms (plan §D9)"
