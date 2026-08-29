@@ -11,8 +11,88 @@
 # mock_provider mocks every data source the AWS provider owns, the policy
 # document generator among them, so a policy built through it is a random
 # string under test and these assertions would be vacuous. Phase 5 §F1.
+#
+# The three runs that read a rendered policy document use `command = apply`,
+# for the reason infra/network/tests/routing.tftest.hcl records: every one of
+# those policies interpolates a computed ARN — a log group's, the artifact
+# bucket's, the connection's, a build project's — and a computed attribute is
+# unknown under `command = plan`, which makes the whole jsonencode unknown and
+# the condition unevaluable. Against a mocked provider apply creates nothing
+# and needs no credentials, but it resolves those ARNs, which is the only way a
+# statement's Resource list can be asserted at all.
+#
+# mock_resource defaults were the other option and are the worse one here: one
+# default per resource type gives every role the same ARN, and the assertion
+# that the plan project runs as the plan role rather than the apply role would
+# then hold no matter which way they were crossed.
 
-mock_provider "aws" {}
+# The mocks below exist because of `command = apply`, and each was added
+# because omitting it produced a hard error rather than because it looked tidy
+# — the same rule infra/environments/prod/tests/compute.tftest.hcl follows.
+#
+#   aws_acm_certificate      domain_validation_options mocks to an empty set,
+#                            and acm.tf's one([...]) over it then yields null
+#                            for a required argument of the validation records.
+#   aws_sns_topic            aws_sns_topic_subscription validates topic_arn
+#                            client-side, and a random eight-character string
+#                            is not an ARN.
+#
+# The four IAM roles get an ARN each through override_resource rather than one
+# shared mock_resource default, for the reason prod's bluegreen.tftest.hcl
+# gives: aws_codebuild_project validates service_role client-side, so the roles
+# need real-looking ARNs — but one default for the type would give all four the
+# same ARN, and "the plan project runs as the plan role" would then hold even
+# with the plan and apply roles crossed.
+#
+# Nothing else is mocked. Every other computed ARN here is compared against
+# itself — the rendered policy against the resource it was rendered from — so
+# the generated value is enough, and leaving the three build projects with
+# three distinct generated ARNs is what makes the RunTheBuilds assertion notice
+# a missing one.
+mock_provider "aws" {
+  mock_resource "aws_acm_certificate" {
+    defaults = {
+      domain_validation_options = [
+        {
+          domain_name           = "api.carloscloudengineer.com"
+          resource_record_name  = "_mock.api.carloscloudengineer.com."
+          resource_record_type  = "CNAME"
+          resource_record_value = "_mock.acm-validations.aws."
+        },
+        {
+          domain_name           = "staging-api.carloscloudengineer.com"
+          resource_record_name  = "_mock.staging-api.carloscloudengineer.com."
+          resource_record_type  = "CNAME"
+          resource_record_value = "_mock.acm-validations.aws."
+        },
+      ]
+    }
+  }
+
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
+  }
+}
+
+override_resource {
+  target = aws_iam_role.pipeline
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-infra-pipeline-role" }
+}
+
+override_resource {
+  target = aws_iam_role.infra_validate
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-infra-validate-role" }
+}
+
+override_resource {
+  target = aws_iam_role.infra_plan
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-infra-plan-role" }
+}
+
+override_resource {
+  target = aws_iam_role.infra_apply
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-infra-apply-role" }
+}
 
 variables {
   project_name = "bgd"
@@ -67,7 +147,7 @@ run "every_pipeline_role_trusts_the_right_service_and_only_this_account" {
 }
 
 run "the_plan_role_can_lock_state_but_cannot_write_it" {
-  command = plan
+  command = apply
 
   assert {
     condition = one([
@@ -87,7 +167,7 @@ run "the_plan_role_can_lock_state_but_cannot_write_it" {
 }
 
 run "the_validate_role_makes_no_aws_call_at_all" {
-  command = plan
+  command = apply
 
   assert {
     condition = alltrue([
@@ -99,7 +179,7 @@ run "the_validate_role_makes_no_aws_call_at_all" {
 }
 
 run "the_pipeline_role_names_everything_it_may_touch" {
-  command = plan
+  command = apply
 
   assert {
     condition = one([
