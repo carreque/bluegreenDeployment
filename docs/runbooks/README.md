@@ -12,9 +12,16 @@ Planned, in the order they are needed:
 | [Network apply, NAT-egress verification and teardown](./phase-04-network.md) | 4 |
 | [Staging apply, verification and teardown](./phase-05-staging.md) | 5 |
 | [Production apply and the blue/green demonstration](./phase-06-prod-blue-green.md) | 6 |
+| [The infra pipeline apply, both exit criteria, and repairing a broken pipeline definition by local apply](./phase-07-infra-pipeline.md) | 7 |
 | Teardown and rebuild — what survives, what does not, how long it takes | 10 |
-| Repairing a broken pipeline definition by local apply | 7 |
 | The three rollback demonstrations | 11 |
+
+From Phase 7 the infra pipeline applies `infra/`, and **merging to `main` is
+what fires a deployment** (roadmap §2.1). The four manual approvals are what
+stand between a merge and production. One consequence has its own step in the
+Phase 7 runbook: the pipeline manages the layer that contains it, so a change
+that breaks the pipeline definition cannot be repaired by the pipeline and
+needs a local `make apply-foundation`.
 
 The project has exactly **three** irreducibly manual steps, all in Phase 3:
 authorising the CodeConnections link, confirming the SNS email subscription, and
