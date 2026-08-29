@@ -57,6 +57,13 @@ locals {
   # interpolates. Declared once so a test can assert the buildspec still
   # exports them — a renamed variable does not fail anything, it just makes
   # every approval message read `#{PlanProd.PLAN_SUMMARY}` literally.
+  #
+  # tflint sees no use because the only consumer is
+  # tests/pipeline_shape.tftest.hcl, which it does not read. That is the
+  # declaration doing its job rather than a leftover: the whole point is to
+  # keep the three names in one place a test can compare the buildspec
+  # against.
+  # tflint-ignore: terraform_unused_declarations
   plan_exported_variables = ["PLAN_STATUS", "PLAN_SUMMARY", "PLAN_URL"]
 
   # Only the two environment layers take an image tag. foundation and network

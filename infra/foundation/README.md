@@ -12,11 +12,14 @@ Durable, effectively free, and painful to recreate. Survives every teardown.
 - SNS topic with an email subscription
 - CodeConnections link to GitHub
 
-Both CodePipelines also belong to this layer, but they arrive with **Phases 7
-and 8** — as files added here, not as a new layer. No IAM role is created in
-Phase 3 either: each of design §8.1's six roles is created by the phase that
-creates the resource it acts on, because a role's policy cannot be scoped to
-resources that do not exist yet.
+The **infrastructure pipeline** lives here, added in Phase 7 — a CodePipeline
+v2 with three CodeBuild projects, four IAM roles, and the two SSM parameters
+that tell the environment layers which image tag to deploy. The application
+pipeline arrives in Phase 8, as more files in this layer rather than a new one.
+
+Each IAM role is still created by the phase that creates the resource it acts
+on, which is why Phase 3 created none: a policy cannot be scoped to resources
+that do not exist yet.
 
 **All three irreducibly manual steps in the project live here:**
 
@@ -40,4 +43,7 @@ Exact commands for all three, with their verification calls, are in
 
 The pipelines live in this layer, so the infra pipeline ends up managing the layer
 that contains it. That is intentional — but it means a broken pipeline definition
-must be repaired by a local `terraform apply`.
+must be repaired by a local `terraform apply`. The
+[Phase 7 runbook](../../docs/runbooks/phase-07-infra-pipeline.md) has that
+procedure as a step of its own, because the moment it is needed is the moment
+the pipeline cannot help.

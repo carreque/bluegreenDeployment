@@ -331,3 +331,37 @@ run "the_buildspec_still_exports_what_the_approval_interpolates" {
     error_message = "renaming an exported variable does not fail anything: the approval message shows the literal #{PlanProd.PLAN_SUMMARY} instead. This is the only thing that notices."
   }
 }
+
+run "pipeline_artifacts_expire_and_the_existing_rule_does_not_cover_them" {
+  command = plan
+
+  assert {
+    condition = length([
+      for r in aws_s3_bucket_lifecycle_configuration.artifacts.rule :
+      r if r.id == "expire-infra-pipeline-artifacts"
+    ]) == 1
+    error_message = "CodePipeline writes a source zip and four plan artifacts per execution as CURRENT versions; the Phase 3 rule expires only noncurrent ones and matches none of them"
+  }
+
+  assert {
+    condition = [
+      for r in aws_s3_bucket_lifecycle_configuration.artifacts.rule :
+      one(r.filter).prefix if r.id == "expire-infra-pipeline-artifacts"
+    ] == ["bgd-us-east-1-infra-pipeline/"]
+    error_message = "the rule must be scoped to the pipeline's own prefix — an unscoped expiration would delete the SBOMs and test reports the bucket exists to keep"
+  }
+}
+
+run "the_outputs_phase_8_and_9_consume_are_present" {
+  command = plan
+
+  assert {
+    condition     = output.infra_pipeline_name == "bgd-us-east-1-infra-pipeline"
+    error_message = "Phase 9's EventBridge rule filters on the pipeline name and reads it from here rather than typing it again"
+  }
+
+  assert {
+    condition     = toset(keys(output.image_tag_parameter_names)) == toset(["staging", "prod"])
+    error_message = "Phase 8 writes these parameters after pushing an image and needs their names from the layer that owns them"
+  }
+}

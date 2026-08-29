@@ -23,16 +23,22 @@ locals {
 }
 
 resource "aws_cloudwatch_log_group" "infra_validate" {
+  # checkov:skip=CKV_AWS_338:thirty days is deliberate and is what var.pipeline_log_retention_days says: a pipeline log is worth keeping until the deployment it describes is understood, and retention is the entirety of what a log group costs. A year of build output for a repository whose every build is reproducible from the commit that produced it buys nothing. Same reasoning as network's flow logs and both ECS log groups.
+  # checkov:skip=CKV_AWS_158:AES256 rather than KMS, for the reason recorded in the Phase 3 plan §D4. This group holds the validate build's stdout — terraform plan output, tflint and checkov findings, and the resource addresses in a plan summary. All of it is derived from the commit, and none of it is a credential or a customer record.
   name              = "/bgd/${var.region}/shared/infra-validate"
   retention_in_days = var.pipeline_log_retention_days
 }
 
 resource "aws_cloudwatch_log_group" "infra_plan" {
+  # checkov:skip=CKV_AWS_338:thirty days is deliberate and is what var.pipeline_log_retention_days says: a pipeline log is worth keeping until the deployment it describes is understood, and retention is the entirety of what a log group costs. A year of build output for a repository whose every build is reproducible from the commit that produced it buys nothing. Same reasoning as network's flow logs and both ECS log groups.
+  # checkov:skip=CKV_AWS_158:AES256 rather than KMS, for the reason recorded in the Phase 3 plan §D4. This group holds the plan build's stdout — terraform plan output, tflint and checkov findings, and the resource addresses in a plan summary. All of it is derived from the commit, and none of it is a credential or a customer record.
   name              = "/bgd/${var.region}/shared/infra-plan"
   retention_in_days = var.pipeline_log_retention_days
 }
 
 resource "aws_cloudwatch_log_group" "infra_apply" {
+  # checkov:skip=CKV_AWS_338:thirty days is deliberate and is what var.pipeline_log_retention_days says: a pipeline log is worth keeping until the deployment it describes is understood, and retention is the entirety of what a log group costs. A year of build output for a repository whose every build is reproducible from the commit that produced it buys nothing. Same reasoning as network's flow logs and both ECS log groups.
+  # checkov:skip=CKV_AWS_158:AES256 rather than KMS, for the reason recorded in the Phase 3 plan §D4. This group holds the apply build's stdout — terraform plan output, tflint and checkov findings, and the resource addresses in a plan summary. All of it is derived from the commit, and none of it is a credential or a customer record.
   name              = "/bgd/${var.region}/shared/infra-apply"
   retention_in_days = var.pipeline_log_retention_days
 }

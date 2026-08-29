@@ -13,6 +13,7 @@
 # the pipeline, and must be fixed with a local `make apply-foundation`.
 
 resource "aws_codepipeline" "infra" {
+  # checkov:skip=CKV_AWS_219:SSE-S3 on the artifact bucket rather than a customer-managed key, the same decision the Phase 3 plan §D4 took for every encrypted-at-rest resource in this project and applied to the bucket this pipeline stores into. The artifacts are a source zip of a public repository and four Terraform plans of infrastructure whose configuration is in that repository; a CMK would add a monthly charge and a key policy for content reproducible from the commit.
   name          = "${local.name_prefix}-infra-pipeline"
   role_arn      = aws_iam_role.pipeline.arn
   pipeline_type = "V2"

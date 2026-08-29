@@ -17,7 +17,7 @@
 # to plan against the tag that was deployed before the teardown.
 
 resource "aws_ssm_parameter" "image_tag" {
-  # checkov:skip=CKV_AWS_337:SecureString needs a KMS key for a value that is printed in every build log, every task definition and every /version response. Encrypting it would imply it is a secret. Plan §F9.
+  # checkov:skip=CKV2_AWS_34:SecureString for a value that is printed in every build log, every task definition and every /version response. Encrypting it would imply it is a secret, and the two places that read it — scripts/pipeline-terraform.sh and the app pipeline — would need a KMS grant to read a container image tag. Plan §F9.
   for_each = toset(local.image_tag_environments)
 
   name = "/bgd/${each.key}/image_tag"

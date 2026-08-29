@@ -70,5 +70,32 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
     }
   }
 
+  # CodePipeline's own artifacts, which the rule above does not reach.
+  #
+  # That rule expires *noncurrent* versions, and every pipeline execution
+  # writes objects under a fresh key — a source zip and one saved plan per
+  # layer. They are all current versions forever, so nothing expires them and
+  # the bucket grows by five objects per run.
+  #
+  # Scoped by prefix rather than applied to the bucket, because the same bucket
+  # holds the SBOMs and test reports the design wants kept as history (§4.2).
+  # CodePipeline writes under <pipelineName>/, which is the prefix below.
+  rule {
+    id     = "expire-infra-pipeline-artifacts"
+    status = "Enabled"
+
+    filter {
+      prefix = "${local.name_prefix}-infra-pipeline/"
+    }
+
+    expiration {
+      days = var.pipeline_artifact_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
   depends_on = [aws_s3_bucket_versioning.artifacts]
 }
