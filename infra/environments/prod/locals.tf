@@ -75,4 +75,28 @@ locals {
   # Slashes, not hyphens — the one deliberate deviation in the naming
   # convention (§3). The console builds its navigation tree from the hierarchy.
   log_group_name = "/${var.project_name}/${var.region}/${local.environment}/api"
+
+  # The three hook function names, in one place, because three separate things
+  # depend on them agreeing: hooks.tf names the functions, iam.tf builds the
+  # invoke role's resource list from them, and outputs.tf publishes them so the
+  # runbook can tail the right log groups.
+  #
+  # iam.tf composes ARNs from these rather than reading module.*.function_arn,
+  # and that is a testing decision as much as a graph one. mock_provider fills
+  # every aws_lambda_function.arn with the same string, so a policy built from
+  # the module outputs cannot be asserted to name three *distinct* functions —
+  # the assertion that a wildcard has not crept in would pass vacuously. Names
+  # are real strings under mocks. tests/bluegreen.tftest.hcl closes the loop by
+  # asserting each module's own function_name equals the entry here, so the
+  # composed ARN cannot drift from the function it is meant to permit.
+  hook_function_names = {
+    pre_scale = "${local.env_prefix}-pre-scale-hook"
+    post_test = "${local.env_prefix}-post-test-hook"
+    post_prod = "${local.env_prefix}-post-prod-hook"
+  }
+
+  hook_function_arns = {
+    for key, name in local.hook_function_names :
+    key => "arn:aws:lambda:${var.region}:${var.account_id}:function:${name}"
+  }
 }
