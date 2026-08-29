@@ -177,3 +177,157 @@ run "the_build_log_groups_have_retention" {
     error_message = "CodeBuild creates its own group without retention if Terraform does not; logs then accumulate forever at a cost nobody attributes"
   }
 }
+
+run "the_stages_are_source_validate_then_the_four_layers_in_order" {
+  command = plan
+
+  assert {
+    condition = [for s in aws_codepipeline.infra.stage : s.name] == [
+      "Source", "Validate", "Foundation", "Network", "Staging", "Prod"
+    ]
+    error_message = "stage order is dependency order; staging reads network's outputs through remote state and prod must be last"
+  }
+
+  assert {
+    condition     = aws_codepipeline.infra.pipeline_type == "V2"
+    error_message = "variable, trigger and before_entry are all V2-only, and a V1 pipeline rejects them at apply rather than at plan"
+  }
+
+  assert {
+    condition     = aws_codepipeline.infra.execution_mode == "QUEUED"
+    error_message = "SUPERSEDED would cancel a run whose approval is open, or one mid-apply, when a second merge lands (plan §D11)"
+  }
+}
+
+run "every_layer_stage_plans_then_approves_then_applies" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in aws_codepipeline.infra.stage : (
+        [for a in s.action : a.name] == ["Plan", "Approve", "Apply"] &&
+        [for a in s.action : a.run_order] == [1, 2, 3]
+      ) if contains(["Foundation", "Network", "Staging", "Prod"], s.name)
+    ])
+    error_message = "each layer stage is three ordered actions in one stage — the skip condition is stage-level, so splitting them could strand an approval (plan §D2)"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in aws_codepipeline.infra.stage : (
+        [for a in s.action : a.category if a.name == "Approve"] == ["Approval"]
+      ) if contains(["Foundation", "Network", "Staging", "Prod"], s.name)
+    ])
+    error_message = "the middle action must be a manual approval; the roadmap's gate is a human, not a rule"
+  }
+}
+
+run "apply_consumes_the_plan_action_output_and_never_replans" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in aws_codepipeline.infra.stage : (
+        [for a in s.action : a.output_artifacts if a.name == "Plan"] ==
+        [for a in s.action : a.input_artifacts if a.name == "Apply"]
+      ) if contains(["Foundation", "Network", "Staging", "Prod"], s.name)
+    ])
+    error_message = "the approval approves a plan file; if Apply does not consume Plan's artifact it computes a new one and the approval meant nothing (plan §D9)"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in aws_codepipeline.infra.stage : (
+        [for a in s.action : a.configuration["ProjectName"] if a.name == "Apply"] ==
+        ["bgd-us-east-1-infra-apply-build"]
+      ) if contains(["Foundation", "Network", "Staging", "Prod"], s.name)
+    ])
+    error_message = "an Apply action pointed at the plan project applies nothing and reports success"
+  }
+}
+
+run "only_the_three_later_stages_are_scope_gated" {
+  command = plan
+
+  assert {
+    condition = length([
+      for s in aws_codepipeline.infra.stage : s if length(s.before_entry) > 0
+    ]) == 3
+    error_message = "network, staging and prod are conditional; foundation runs under every scope so a condition there could only evaluate true"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in aws_codepipeline.infra.stage : alltrue([
+        for c in s.before_entry[0].condition : c.result == "SKIP"
+      ]) if length(s.before_entry) > 0
+    ])
+    error_message = "the result must be SKIP, not FAIL — an out-of-scope stage leaves the execution green, or Phase 9's change-failure-rate counts a deliberate stop as a failure"
+  }
+
+  assert {
+    condition = [
+      for s in aws_codepipeline.infra.stage :
+      s.before_entry[0].condition[0].rule[0].configuration["Value"]
+      if s.name == "Prod"
+    ] == ["all"]
+    error_message = "production runs under exactly one scope, and equality is the operator a VariableCheck certainly has (plan §F2)"
+  }
+}
+
+run "the_trigger_filters_the_paths_the_pipeline_actually_owns" {
+  command = plan
+
+  assert {
+    condition = toset(aws_codepipeline.infra.trigger[0].git_configuration[0].push[0].file_paths[0].includes) == toset([
+      "infra/**", "pipelines/**", "scripts/pipeline-*.sh", "scripts/install-terraform.sh"
+    ])
+    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12)"
+  }
+
+  assert {
+    condition     = aws_codepipeline.infra.stage[0].action[0].configuration["DetectChanges"] == "false"
+    error_message = "DetectChanges creates a second, unfiltered webhook that fires on every push to the branch, and terraform plan stays clean forever (plan §D13)"
+  }
+}
+
+run "deploy_scope_is_an_execution_variable_defaulting_to_all" {
+  command = plan
+
+  assert {
+    condition     = aws_codepipeline.infra.variable[0].name == "DEPLOY_SCOPE"
+    error_message = "the roadmap names this variable, and scripts/pipeline-terraform.sh reads it by that name"
+  }
+
+  assert {
+    condition     = aws_codepipeline.infra.variable[0].default_value == "all"
+    error_message = "a git-triggered run cannot set variables, so the default is the policy: every infra merge reaches production, gated by four approvals (plan §F4)"
+  }
+}
+
+run "the_approval_shows_the_plan_it_is_approving" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in aws_codepipeline.infra.stage : alltrue([
+        for a in s.action :
+        strcontains(a.configuration["CustomData"], ".PLAN_SUMMARY}")
+        if a.name == "Approve"
+      ]) if contains(["Foundation", "Network", "Staging", "Prod"], s.name)
+    ])
+    error_message = "an approval with no plan in the message is a reflex, not a decision — the roadmap asks for the plan output in the approval"
+  }
+}
+
+run "the_buildspec_still_exports_what_the_approval_interpolates" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for v in local.plan_exported_variables :
+      strcontains(file("${path.module}/../../pipelines/infra-plan.yml"), v)
+    ])
+    error_message = "renaming an exported variable does not fail anything: the approval message shows the literal #{PlanProd.PLAN_SUMMARY} instead. This is the only thing that notices."
+  }
+}
