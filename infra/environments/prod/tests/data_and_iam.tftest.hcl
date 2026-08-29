@@ -50,6 +50,25 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:elasticloadbalancing:us-east-1:590184028094:listener/app/mock/0123456789abcdef/aaaaaaaaaaaaaaaa" }
   }
 
+  # Added because omitting it produced a hard error: the ECS service validates
+  # advanced_configuration's production_listener_rule and test_listener_rule
+  # client-side, and they are rule ARNs rather than listener ARNs (Phase 0 A7),
+  # so the aws_lb_listener mock above does not cover them.
+  mock_resource "aws_lb_listener_rule" {
+    defaults = { arn = "arn:aws:elasticloadbalancing:us-east-1:590184028094:listener-rule/app/mock/0123456789abcdef/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbb" }
+  }
+
+  # Added because omitting it produced a hard error: the ECS service validates
+  # every lifecycle_hook's hook_target_arn client-side.
+  #
+  # All three functions therefore share one ARN under test, which is why iam.tf
+  # composes the invoke role's resource list from local.hook_function_names
+  # instead — three identical mocked ARNs cannot show that a wildcard has not
+  # crept in.
+  mock_resource "aws_lambda_function" {
+    defaults = { arn = "arn:aws:lambda:us-east-1:590184028094:function:mock" }
+  }
+
   mock_data "aws_ecr_image" {
     defaults = { image_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111" }
   }
