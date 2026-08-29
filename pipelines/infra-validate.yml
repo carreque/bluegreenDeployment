@@ -1,0 +1,23 @@
+# The infra pipeline's gate. Runs the identical make targets you run locally,
+# which is what makes a green pipeline and a green laptop mean the same thing.
+#
+# No AWS credentials are used here and none are available: scripts/tf.sh
+# initialises validate and test with -backend=false, and tflint and checkov
+# read files. The project's service role grants its log group and the artifact
+# bucket, and nothing else. Plan §D6.
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - ./scripts/install-terraform.sh
+
+  build:
+    commands:
+      # Ordered cheapest-first so a formatting mistake fails in seconds rather
+      # than after the container pulls. tf-lint is last because it is the only
+      # step that pulls two images.
+      - make tf-fmt-check
+      - make tf-validate
+      - make tf-test
+      - make tf-lint
