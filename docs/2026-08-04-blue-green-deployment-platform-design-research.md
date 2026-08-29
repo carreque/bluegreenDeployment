@@ -369,6 +369,36 @@ The production ECS service runs `deployment_configuration { strategy = "BLUE_GRE
 
 Followed by a **5-minute bake period** with CloudWatch alarms attached, triggering automatic rollback on breach. Alarms: ALB 5xx rate, target response time p95, unhealthy host count.
 
+> **Amended in Phase 6 (2026-08-29).** This table says what each hook is *for*
+> but not what it must **return**, and that is what someone implementing one
+> comes here looking for.
+>
+> **The handler returns `{"hookStatus": "SUCCEEDED"}` on success and *raises* on
+> failure.** It deliberately does not return a symmetric `"FAILED"` payload.
+>
+> The reason is that the contract could not be confirmed offline. The exact
+> payload ECS expects back is **not in the Terraform provider schema** — it is a
+> runtime API contract, not a resource attribute — and there is no local source
+> of truth for it. The two possible mistakes are not symmetric:
+>
+> - If ECS reads a `hookStatus` field and the handler raises on failure, ECS
+>   sees an invocation error. No plausible contract reads an invocation error as
+>   success. **Safe.**
+> - If ECS treats any successful invocation as a pass and the handler returns
+>   `{"hookStatus": "FAILED"}`, **the bad build is promoted to production** —
+>   the exact failure §7.1's first demonstration exists to prove cannot happen.
+>
+> So the handler is built to be correct under either contract, choosing the
+> failure mode that rejects rather than promotes. The runbook's step 9 reads the
+> hook's CloudWatch log after the first real deployment and records what ECS
+> actually did; if the real contract turns out narrower, the fix is an
+> **addition**, never a rewrite into a symmetric return.
+>
+> A related note on the alarm count: this section names three signals but the
+> layer creates **four** alarms. `UnHealthyHostCount` has no LoadBalancer-only
+> form — CloudWatch publishes it per target group — so it takes one alarm per
+> colour, both listed in `alarm_names`.
+
 ### 7.1 Rollback evidence — three distinct demonstrations
 
 1. **Hook rejection** — the bad build never receives production traffic
@@ -401,6 +431,31 @@ Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task 
 > **required** attribute — it is the role the ECS deployment controller assumes to
 > rewrite ALB listener rules during a traffic shift. Without it the production
 > service cannot be created at all.
+
+> **Amended in Phase 6 (2026-08-29).** There is a **seventh**, and Phase 0's
+> amendment did not find it because it was reading the attribute that had gone
+> missing rather than the whole schema.
+> `deployment_configuration.lifecycle_hook.role_arn` is a separately **required**
+> slot: the role ECS assumes to invoke the three lifecycle hook functions.
+>
+> It is not the sixth role under another name. One needs
+> `elasticloadbalancing` permissions on this ALB's listener rules; the other
+> needs `lambda:InvokeFunction` on exactly three functions. This section's own
+> stated premise is "least-privilege roles, separated by function", and merging
+> them would give the rule-rewriter permission to invoke arbitrary Lambdas and
+> the invoker permission to rewrite production routing. `infra/environments/prod`
+> creates both, and asserts in a test that they are different roles so a later
+> simplification has to argue with it.
+>
+> One further note on the blue/green controller, which is the one place in this
+> project where the AWS-**managed** policy is the stricter choice rather than
+> the lazier one. The action set ECS uses to rewrite listener rules mid-shift is
+> not in the provider schema and cannot be read offline; a hand-rolled policy
+> that is slightly too narrow does not fail at apply, it fails halfway through a
+> production traffic shift, in the window where neither colour cleanly owns the
+> listener. So that role attaches
+> `AmazonECSInfrastructureRolePolicyForLoadBalancers`. Every other role in the
+> project is still hand-written. See the Phase 6 plan's D5.
 
 ---
 
@@ -438,6 +493,24 @@ Single GitHub monorepo:
 > only), and this table did not price ARM64 specifically. Graviton Fargate is
 > cheaper than x86 at the same size, so the $27 figure is conservative for
 > staging's share rather than wrong.
+
+> **Amended in Phase 6 (2026-08-29).** The same correction for production's
+> share, plus one line item this table does not have at all.
+>
+> Production's half of the `$27` Fargate line is **two** 0.25 vCPU / 0.5 GB
+> tasks, also on **ARM64**, so the figure is conservative here for the same
+> reason. During a blue/green deployment both colours run simultaneously, so
+> production briefly costs four tasks rather than two — for eight to twelve
+> minutes per deployment, which rounds to nothing monthly but is worth knowing
+> before anyone deploys in a loop.
+>
+> **Three Lambda functions are not priced here.** They are invoked three times
+> per deployment, run for seconds, and sit far inside the perpetual free tier —
+> effectively $0, and named only so the absence reads as checked rather than
+> forgotten. Phase 9's metrics collector joins them.
+>
+> Record the real figure from the runbook once production has run for a full
+> billing period. Nothing in this table is contradicted.
 
 ---
 
