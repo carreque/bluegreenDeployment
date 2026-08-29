@@ -11,6 +11,7 @@ Planned, in the order they are needed:
 | [Bootstrap and foundation apply, including all three manual steps](./phase-03-bootstrap-and-foundation.md) | 3 |
 | [Network apply, NAT-egress verification and teardown](./phase-04-network.md) | 4 |
 | [Staging apply, verification and teardown](./phase-05-staging.md) | 5 |
+| [Production apply and the blue/green demonstration](./phase-06-prod-blue-green.md) | 6 |
 | Teardown and rebuild — what survives, what does not, how long it takes | 10 |
 | Repairing a broken pipeline definition by local apply | 7 |
 | The three rollback demonstrations | 11 |
