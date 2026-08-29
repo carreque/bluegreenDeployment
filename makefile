@@ -23,7 +23,19 @@ SHELL := /usr/bin/env bash
 # `make AWS_PROFILE=other <target>` on the command line, which is the only
 # override that should count. Found in Phase 3; see
 # docs/phases/phase3/2026-08-24-local-verification.md §F7.
+#
+# Not set inside CodeBuild. There is no shared config file there and no such
+# profile: credentials come from the build project's service role. An exported
+# AWS_PROFILE naming a profile that does not exist makes every SDK call fail
+# with "The config profile could not be found" INSTEAD of falling back to the
+# role — a credentials-shaped error with a makefile-shaped cause. Nothing the
+# Validate stage runs today calls AWS, but that is a property of the current
+# target list rather than a guarantee. Phase 7 §F6.
+ifndef CODEBUILD_BUILD_ID
 AWS_PROFILE := bootcamp-administrator-access
+export AWS_PROFILE
+endif
+
 AWS_REGION  := us-east-1
 AWS_ACCOUNT_ID := 590184028094
 APP_DIR := app
@@ -32,7 +44,7 @@ VENV    := $(CURDIR)/$(APP_DIR)/.venv
 PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 RUFF    := $(VENV)/bin/ruff
-export AWS_PROFILE AWS_REGION AWS_ACCOUNT_ID
+export AWS_REGION AWS_ACCOUNT_ID
 
 $(VENV)/bin/python:
 	@./scripts/create-venv.sh
@@ -185,6 +197,13 @@ TF_LAYERS := bootstrap foundation network staging prod
 .PHONY: tf-fmt
 tf-fmt: ## Format every Terraform file in place
 	@terraform fmt -recursive infra
+
+# The pipeline's formatting gate. tf-fmt above rewrites files, which is right
+# on a laptop and useless in CodeBuild, where a reformatted file is discarded
+# with the container. -check exits non-zero instead, and -diff says which lines.
+.PHONY: tf-fmt-check
+tf-fmt-check: ## Fail if any Terraform file is unformatted (no AWS session needed)
+	@terraform fmt -check -recursive -diff infra
 
 .PHONY: tf-validate
 tf-validate: ## Validate every Terraform layer (no AWS session needed)

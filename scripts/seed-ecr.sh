@@ -26,6 +26,36 @@ SKOPEO="quay.io/skopeo/stable@sha256:47853bb9fb24202af9110531ebd6e43c5f97701254c
 PROFILE="${AWS_PROFILE:-bootcamp-administrator-access}"
 REGION="${AWS_REGION:-us-east-1}"
 
+# Record the tag as the one both environment layers should deploy.
+#
+# The environment layers declare image_tag with no default and read it from
+# terraform.tfvars, which is gitignored — so a CodeBuild workspace has no value
+# and the infra pipeline cannot plan staging or prod without this (Phase 7
+# §D8). Writing it here rather than in a separate step means the parameter is
+# populated by the same command that makes the tag real.
+#
+# --overwrite because the parameter is created holding "unset" and every
+# subsequent seed replaces the previous tag. Terraform ignores changes to the
+# value, so this does not create drift.
+#
+# A function rather than a block at the end, because the already-seeded path
+# above exits early — and that is the common path once Phases 5 and 6 have run.
+# Leaving this only at the end would mean the parameters stayed "unset" on
+# every machine where the image was pushed before Phase 7 existed, which is the
+# one case the infra pipeline cannot plan through.
+record_image_tag_parameters() {
+  local env
+  for env in staging prod; do
+    aws ssm put-parameter \
+      --profile "$PROFILE" --region "$REGION" \
+      --name "/bgd/${env}/image_tag" \
+      --value "$TAG" \
+      --type String \
+      --overwrite >/dev/null
+    dim "  /bgd/${env}/image_tag  ->  $TAG"
+  done
+}
+
 [[ -f "$DIST/image.oci.tar" ]] || die "no image archive — run 'make build' first"
 [[ -f "$DIST/image-digest.txt" ]] || die "no recorded digest — run 'make build' first"
 [[ -f "$DIST/image-ref.txt" ]] || die "no recorded image ref — run 'make build' first"
@@ -62,6 +92,7 @@ existing="$(aws ecr describe-images \
 if [[ -n "$existing" && "$existing" != "None" ]]; then
   if [[ "$existing" == "$LOCAL_DIGEST" ]]; then
     ok "already seeded — $TAG is $existing"
+    record_image_tag_parameters
     exit 0
   fi
   die "tag $TAG already exists with a different digest ($existing); ECR tags are immutable"
@@ -103,6 +134,9 @@ pushed="$(aws ecr describe-images \
 [[ "$pushed" == "$LOCAL_DIGEST" ]] ||
   die "digest mismatch — ECR holds $pushed, the artifact of record is $LOCAL_DIGEST"
 
+record_image_tag_parameters
+
 ok "seeded $DEST"
 dim "  digest  $pushed"
-dim "  Phases 5 and 6 set BGD_IMAGE_DIGEST to this value in the task definition."
+dim "  Phases 5 and 6 set BGD_IMAGE_DIGEST to this value in the task definition,"
+dim "  and the infra pipeline plans both environments against /bgd/<env>/image_tag."
