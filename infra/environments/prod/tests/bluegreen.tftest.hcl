@@ -298,3 +298,174 @@ run "the_hook_timeout_survives_a_slow_ready_probe" {
     error_message = "a hook shorter than 60s is killed mid-/ready and rejects builds that were fine"
   }
 }
+
+# --- the four alarms the bake period is gated on -----------------------------
+
+run "there_are_exactly_four_bake_alarms_named_by_convention" {
+  command = apply
+
+  assert {
+    condition = toset(local.bake_alarm_names) == toset([
+      "bgd-us-east-1-prod-target-5xx",
+      "bgd-us-east-1-prod-p95-latency",
+      "bgd-us-east-1-prod-unhealthy-blue",
+      "bgd-us-east-1-prod-unhealthy-green",
+    ])
+    error_message = "local.bake_alarm_names must name exactly the four alarms this layer builds"
+  }
+
+  # Task 8 feeds this list straight into alarms.alarm_names. A missing member is
+  # a silent gap in the gate: the deployment still succeeds, the bake still
+  # runs, and it simply observes one fewer thing.
+  assert {
+    condition     = length(local.bake_alarm_names) == 4
+    error_message = "a missing alarm name is a silent gap in the bake gate"
+  }
+
+  assert {
+    condition = toset(local.bake_alarm_names) == toset([
+      aws_cloudwatch_metric_alarm.five_xx.alarm_name,
+      aws_cloudwatch_metric_alarm.p95_latency.alarm_name,
+      aws_cloudwatch_metric_alarm.unhealthy["blue"].alarm_name,
+      aws_cloudwatch_metric_alarm.unhealthy["green"].alarm_name,
+    ])
+    error_message = "the names in local.bake_alarm_names must be the alarms that actually exist, or ECS bakes against alarms that were never created"
+  }
+}
+
+run "the_user_facing_alarms_measure_the_whole_load_balancer" {
+  command = apply
+
+  # LoadBalancer only, deliberately. These two measure what users actually
+  # experience, which is the rollback criterion. Scoping them per target group
+  # would also trip on the *old* group's errors as it drains, which is not a
+  # reason to roll back a promotion that already happened. Plan §D8.
+  assert {
+    condition = (
+      toset(keys(aws_cloudwatch_metric_alarm.five_xx.dimensions)) == toset(["LoadBalancer"]) &&
+      toset(keys(aws_cloudwatch_metric_alarm.p95_latency.dimensions)) == toset(["LoadBalancer"])
+    )
+    error_message = "the 5xx and latency alarms carry only the LoadBalancer dimension; per-group scoping trips on the old colour draining"
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.five_xx.metric_name == "HTTPCode_Target_5XX_Count" &&
+      aws_cloudwatch_metric_alarm.p95_latency.metric_name == "TargetResponseTime"
+    )
+    error_message = "the two user-facing alarms must measure target 5xx responses and target response time"
+  }
+
+  # An average hides the tail the design named. p95 is the statistic, and
+  # extended_statistic is the only field that can express it — statistic
+  # = "Average" would pass every deployment where most requests were fine.
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.p95_latency.extended_statistic == "p95" &&
+      (aws_cloudwatch_metric_alarm.p95_latency.statistic == null || aws_cloudwatch_metric_alarm.p95_latency.statistic == "")
+    )
+    error_message = "the latency alarm must use extended_statistic p95; an average hides the tail"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.p95_latency.threshold == var.alarm_p95_seconds
+    error_message = "the latency threshold comes from var.alarm_p95_seconds so it can be corrected in one place"
+  }
+}
+
+run "the_unhealthy_host_alarms_are_per_target_group_because_they_must_be" {
+  command = apply
+
+  # UnHealthyHostCount has no LoadBalancer-only form — CloudWatch publishes it
+  # per target group, because "unhealthy" is a property of a target's
+  # registration in a group rather than of the load balancer. So it takes two
+  # alarms, one per colour, both listed in alarm_names. Plan §F3.
+  assert {
+    condition = alltrue([
+      for colour in ["blue", "green"] :
+      toset(keys(aws_cloudwatch_metric_alarm.unhealthy[colour].dimensions)) == toset(["LoadBalancer", "TargetGroup"])
+    ])
+    error_message = "UnHealthyHostCount is published per target group; both dimensions are required (plan §F3)"
+  }
+
+  assert {
+    condition = alltrue([
+      for colour in ["blue", "green"] :
+      aws_cloudwatch_metric_alarm.unhealthy[colour].metric_name == "UnHealthyHostCount"
+    ])
+    error_message = "both colour alarms must measure UnHealthyHostCount"
+  }
+
+  # for_each over the two groups, so they cannot drift apart. If one colour's
+  # alarm were ever configured differently from the other's, deployments would
+  # be gated more strictly in one direction than the other.
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.unhealthy["blue"].threshold == aws_cloudwatch_metric_alarm.unhealthy["green"].threshold &&
+      aws_cloudwatch_metric_alarm.unhealthy["blue"].period == aws_cloudwatch_metric_alarm.unhealthy["green"].period &&
+      aws_cloudwatch_metric_alarm.unhealthy["blue"].evaluation_periods == aws_cloudwatch_metric_alarm.unhealthy["green"].evaluation_periods
+    )
+    error_message = "the two colour alarms must be identical, or deployments are gated more strictly in one direction"
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.unhealthy["blue"].dimensions["TargetGroup"] != aws_cloudwatch_metric_alarm.unhealthy["green"].dimensions["TargetGroup"]
+    )
+    error_message = "the two colour alarms must watch different target groups, or one colour is unmonitored"
+  }
+}
+
+run "every_alarm_can_evaluate_inside_a_five_minute_bake" {
+  command = apply
+
+  # Forced, not a matter of taste: a five-minute bake cannot be gated by an
+  # alarm that needs five minutes to evaluate.
+  assert {
+    condition = alltrue([
+      for alarm in [
+        aws_cloudwatch_metric_alarm.five_xx,
+        aws_cloudwatch_metric_alarm.p95_latency,
+        aws_cloudwatch_metric_alarm.unhealthy["blue"],
+        aws_cloudwatch_metric_alarm.unhealthy["green"],
+      ] : alarm.period == 60 && alarm.evaluation_periods <= 2
+    ])
+    error_message = "60-second periods and at most two datapoints; a slower alarm cannot fire inside the bake it gates"
+  }
+
+  # Load-bearing rather than cosmetic. The idle target group publishes no
+  # UnHealthyHostCount at all, so the CloudWatch default would park that alarm
+  # permanently in INSUFFICIENT_DATA — and whether ECS treats INSUFFICIENT_DATA
+  # as breaching is not something to find out during a production shift.
+  assert {
+    condition = alltrue([
+      for alarm in [
+        aws_cloudwatch_metric_alarm.five_xx,
+        aws_cloudwatch_metric_alarm.p95_latency,
+        aws_cloudwatch_metric_alarm.unhealthy["blue"],
+        aws_cloudwatch_metric_alarm.unhealthy["green"],
+      ] : alarm.treat_missing_data == "notBreaching"
+    ])
+    error_message = "the idle target group publishes nothing; without notBreaching its alarm never leaves INSUFFICIENT_DATA"
+  }
+
+  # Plan §D9. These exist so ECS can roll back, not so anyone is emailed. Phase
+  # 9 owns notification, has the SNS topic in foundation already, and will
+  # attach actions to these same alarms rather than creating parallel ones.
+  # Attaching SNS here would also send mail on every deliberate demonstration in
+  # Phases 6 and 11, training the recipient to ignore the topic before it
+  # carries a real alert.
+  assert {
+    condition = alltrue([
+      for alarm in [
+        aws_cloudwatch_metric_alarm.five_xx,
+        aws_cloudwatch_metric_alarm.p95_latency,
+        aws_cloudwatch_metric_alarm.unhealthy["blue"],
+        aws_cloudwatch_metric_alarm.unhealthy["green"],
+      # null when unset, which is the shape a correct config produces; an
+      # empty set is accepted too so this cannot be "fixed" into a false pass.
+      ] : coalesce(try(length(alarm.alarm_actions), 0), 0) == 0 && coalesce(try(length(alarm.ok_actions), 0), 0) == 0
+    ])
+    error_message = "no alarm carries actions; Phase 9 owns notification and attaches to these same alarms (plan §D9)"
+  }
+}
