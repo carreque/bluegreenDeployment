@@ -43,7 +43,14 @@ Four resources per instantiation, which is the whole module:
 
 ## Outputs
 
-`function_arn`, `function_name`, `log_group_name`, `role_arn`.
+`function_arn`, `function_name`, `log_group_name`, `role_arn` — the identifiers
+a caller wires into other resources.
+
+`runtime`, `architectures`, `timeout_seconds`, `environment_variables` — the
+function's *resolved* configuration, exposed for one reason: a module's resources
+are not reachable from a `.tftest.hcl` file, only its outputs are. Without these
+the calling layer cannot assert which listener each hook probes, and that is the
+worst thing in this layer to get wrong.
 
 ## Single-file packaging is the design, not a limitation to work around
 
