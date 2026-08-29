@@ -95,9 +95,28 @@ The environment still appears on every resource as a **tag** (§5), which is wha
 | CloudWatch log group | `/bgd/us-east-1/<env>/<service>` | `/bgd/us-east-1/prod/api` |
 | CloudWatch alarm | `bgd-us-east-1-<env>-<metric>` | `bgd-us-east-1-prod-5xx-rate` |
 
-### The one deliberate deviation
+### The deliberate deviations
 
 **CloudWatch log groups use slashes, not hyphens.** Log group names are hierarchical by AWS convention (`/aws/ecs/…`, `/aws/lambda/…`), and the console builds its navigation tree from the slash structure. Using hyphens would produce one flat list of unrelated groups. The segments and their order are unchanged — only the separator differs.
+
+> **Amended in Phase 6 (2026-08-29).** There are now **two**, and the heading
+> above said "the one" until this phase.
+>
+> **Lambda log groups are `/aws/lambda/<function-name>`, not
+> `/bgd/us-east-1/<env>/<service>`.** So the three lifecycle hooks write to
+> `/aws/lambda/bgd-us-east-1-prod-post-test-hook` rather than to
+> `/bgd/us-east-1/prod/post-test-hook`.
+>
+> That prefix is what Lambda writes to unless a `logging_config` block redirects
+> it, and every console path, every sample query and every AWS tool assumes it.
+> Deviating would gain consistency in this document and lose it everywhere an
+> operator actually looks — including in the runbook step that tails these
+> groups while a production deployment is in flight, which is the worst possible
+> moment to be hunting for a log group under a name only this repository uses.
+>
+> The **function name** still follows §1 exactly, which is where the convention
+> earns its keep. Only the prefix Lambda owns is left alone. See
+> `infra/modules/lambda/main.tf`.
 
 ---
 
@@ -238,6 +257,27 @@ CodeConnections authorisation, so both manual steps belong in the same runbook.
 > Expected: all four convention tags, with `environment = staging`. Phase 6
 > repeats this against its own cluster and service names.
 
+> **Amended in Phase 6 (2026-08-29).** The Phase 6 half of the row is now done
+> too: `aws_ecs_service.api.propagate_tags = "SERVICE"` in
+> `infra/environments/prod/ecs.tf`, asserted by the same-named run in
+> `infra/environments/prod/tests/compute.tftest.hcl`. **Both halves of the
+> Phases 5 and 6 row are complete in code; neither is confirmed on a running
+> task until the runbooks are executed**, for the reason the Phase 5 amendment
+> gives — `propagate_tags` is not `computed`, so no plan can show it landed.
+>
+> It matters more here than in staging: production runs **two** tasks rather
+> than one, plus an entire green task set during every blue/green deployment.
+> The command, against this layer's names:
+>
+> ```bash
+> aws ecs list-tasks --cluster bgd-us-east-1-prod-cluster \
+>   --query 'taskArns[0]' --output text
+> aws ecs describe-tasks --cluster bgd-us-east-1-prod-cluster \
+>   --tasks <arn> --include TAGS --query 'tasks[0].tags'
+> ```
+>
+> Expected: all four convention tags, with `environment = prod`.
+
 ---
 
 ## 7. Worked example
@@ -251,9 +291,21 @@ Target groups    bgd-us-east-1-prod-api-blue
 ECS cluster      bgd-us-east-1-prod-cluster
 ECS service      bgd-us-east-1-prod-api
 Task exec role   bgd-us-east-1-prod-task-exec-role
+Task role        bgd-us-east-1-prod-task-role
+Blue/green role  bgd-us-east-1-prod-bluegreen-role
+Hook invoke role bgd-us-east-1-prod-hook-invoke-role
+Hook exec roles  bgd-us-east-1-prod-pre-scale-hook-exec-role      (and two more)
+Lambda functions bgd-us-east-1-prod-pre-scale-hook
+                 bgd-us-east-1-prod-post-test-hook
+                 bgd-us-east-1-prod-post-prod-hook
 Log group        /bgd/us-east-1/prod/api
-DynamoDB         bgd-us-east-1-prod-transactions
-Alarm            bgd-us-east-1-prod-5xx-rate
+Hook log groups  /aws/lambda/bgd-us-east-1-prod-post-test-hook    (and two more)
+DynamoDB         bgd-us-east-1-prod-accounts
+                 bgd-us-east-1-prod-transactions
+Alarms           bgd-us-east-1-prod-target-5xx
+                 bgd-us-east-1-prod-p95-latency
+                 bgd-us-east-1-prod-unhealthy-blue
+                 bgd-us-east-1-prod-unhealthy-green
 
 tags on all of the above:
   environment = prod
@@ -261,3 +313,22 @@ tags on all of the above:
   region      = us-east-1
   owner       = carreque45@gmail.com
 ```
+
+> **Amended in Phase 6 (2026-08-29).** This example predated the layer and
+> listed nine resources; the layer contains rather more. Brought up to what
+> `infra/environments/prod` actually creates — the two extra IAM roles, the
+> three hook functions and their execution roles, the test listener's rules, the
+> second table, and four alarms rather than one.
+>
+> **Two names changed rather than being added.** The alarm example read
+> `bgd-us-east-1-prod-5xx-rate`; the alarm that exists is
+> `bgd-us-east-1-prod-target-5xx`, because it measures
+> `HTTPCode_Target_5XX_Count` — 5xx the *application* returned — rather than a
+> rate, and distinguishing it from ELB-generated 5xx is the point. And there are
+> four alarms, not one, because `UnHealthyHostCount` has no LoadBalancer-only
+> form and so takes one per colour.
+>
+> **The longest name in the whole project appears here:**
+> `bgd-us-east-1-prod-api-green`, at 28 characters against the 32-character cap
+> that §4 records and that §1 chose `bgd` to fit inside. Nothing needs
+> truncating anywhere, with four characters to spare.

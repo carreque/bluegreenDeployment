@@ -349,6 +349,63 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 
 **Exit criteria:** a manual CLI blue/green deployment completes; `/version` returns different SHAs on `:443` and `:8443` mid-deployment, which is the direct proof of which colour serves whom; a deliberately failing hook aborts the deployment with zero production traffic shifted.
 
+> **Amended in Phase 6 (2026-08-29).** The layer built more than this task list
+> names, all decided and recorded in [the Phase 6
+> plan](./phases/phase6/2026-08-28-phase-06-implementation-plan.md)'s §0.1:
+>
+> - **The two DynamoDB tables** (D13). Missing from the task list above but
+>   present in §1's layer diagram, which lists `DynamoDB` under `envs/prod/`.
+>   The diagram is right and the task list is incomplete: the application cannot
+>   serve `/ready`, let alone a transaction, without its tables — and `/ready`
+>   is the check the dark canary's whole value rests on. They are prod's own,
+>   not shared with staging.
+> - **`desired_count = 2`** (D13). From design §10, which prices "Fargate
+>   (staging 1 task, prod 2 tasks)"; the task list does not state it. Two tasks
+>   across two availability zones is also the minimum that makes the
+>   `UnHealthyHostCount` bake alarm mean "one task is sick" rather than being a
+>   synonym for "the service is down".
+> - **Design §8.1's six roles are seven** (D4). Phase 0 found a sixth,
+>   `load_balancer.advanced_configuration.role_arn`; inspecting the same schema
+>   for this phase turned up a seventh that neither document named,
+>   `deployment_configuration.lifecycle_hook.role_arn`. They are not
+>   interchangeable — one needs `elasticloadbalancing` on listener rules, the
+>   other `lambda:InvokeFunction` on three functions — and merging them would
+>   give the rule-rewriter permission to invoke arbitrary Lambdas. This layer
+>   creates five of the seven.
+> - **Four listed alarms are four actual alarms, but not the ones implied**
+>   (D8, F3). The list above names three signals. `UnHealthyHostCount` has no
+>   LoadBalancer-only form — CloudWatch publishes it per target group — so it
+>   takes two alarms, one per colour. The other two carry the `LoadBalancer`
+>   dimension only, because per-group scoping would trip on the *old* group's
+>   errors as it drains, which is not a reason to roll back a promotion that
+>   already happened.
+> - **Four decisions the task list does not name.** No deployment circuit
+>   breaker, deliberately — the bake with alarms is this environment's rollback
+>   mechanism, and how the two would interact is not in the schema (Task 8).
+>   `wait_for_steady_state = true` (D11), so an apply cannot report success over
+>   a deployment that rolled back. No ALB access logs (D7) — Phase 5's D5
+>   deferred that decision to this phase, and the answer is still no, because
+>   they arrive on a five-minute lag, longer than the deployment they would
+>   document. No `alarm_actions` (D9) — Phase 9 owns notification and attaches
+>   to these same alarms.
+> - **"Exercised by hand via the AWS CLI" means observed, not initiated**
+>   (D10). Terraform owns the task definition and the service shape, so a CLI
+>   `update-service --task-definition` would register drift the next apply
+>   reverts, mid-deployment. What starts a deployment is changing `image_tag`
+>   and running `make apply-prod`; what the CLI does is watch the stage
+>   transitions and abort one by hand. Design §1.5's argument for why the
+>   CodePipeline ECS action's image-only limitation is a non-issue rests on
+>   that ownership.
+>
+> **None of the three exit criteria is met by the branch alone.** All three need
+> a running service, and the Phase 6 session created no AWS resource (D1). They
+> are met by [the runbook](./runbooks/phase-06-prod-blue-green.md) — steps 12,
+> 13 and 14 respectively.
+>
+> §2's branch table row 6 reads `feat/Phase6_ProdBlueGreen`, which is the branch
+> used. **No amendment needed there** — recorded explicitly, as Phases 3 and 5
+> did, so the absence reads as checked rather than overlooked.
+
 ### Phase 7 — Infrastructure pipeline
 
 - CodePipeline v2 sourced from `carreque/bluegreenDeployment` via CodeConnections, filtered to `infra/**` on `main`.

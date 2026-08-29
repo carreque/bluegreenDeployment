@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars, which is gitignored, and set image_tag.
+#
+# Every other variable in this layer already defaults to the value this project
+# wants. image_tag deliberately has no default: it changes with every build, and
+# a stale default would silently deploy an old image.
+#
+#   cat app/dist/image-ref.txt      # the tag scripts/build-image.sh produced
+#
+# The tag must already be in ECR — `make seed-ecr` in Phase 3, or a push from
+# Phase 8's pipeline. terraform plan fails in data.aws_ecr_image otherwise, and
+# names the tag it could not find.
+#
+# On THIS layer, changing this value is not a config edit — it is what starts a
+# blue/green deployment. `make apply-prod` registers a new task definition
+# revision, ECS provisions green, runs the three hooks, shifts traffic and bakes
+# for five minutes under the alarms. The apply does not return until that has
+# finished or rolled back (wait_for_steady_state, plan §D11), so expect six to
+# ten minutes. See docs/runbooks/phase-06-prod-blue-green.md.
+
+image_tag = "0.1.0-84d4eb0"
+
+# Occasionally useful, all correct as they stand:
+# task_cpu             = 256
+# task_memory          = 512
+# desired_count        = 2
+# log_retention_days   = 14
+# bake_time_minutes    = 5
+# hook_timeout_seconds = 60
+# alarm_p95_seconds    = 2

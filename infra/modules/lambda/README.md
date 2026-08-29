@@ -16,3 +16,70 @@ change failure rate and MTTR under a `ReleaseMetrics` namespace.
 
 Runtime is **`python3.14`**, confirmed available in Phase 0 — matching the
 container and the local interpreter exactly, with no version divergence.
+Architecture is **`arm64`**, matching the container's Graviton choice and price.
+
+## What it creates
+
+Four resources per instantiation, which is the whole module:
+
+| Resource | Why it is here rather than in the calling layer |
+|---|---|
+| `data.archive_file` | Builds the deployment zip from one `.py` file |
+| `aws_lambda_function` | The function itself |
+| `aws_cloudwatch_log_group` | Created explicitly so retention is managed and the role can be scoped to it |
+| `aws_iam_role` + `aws_iam_role_policy` | Write to that log group, and nothing else |
+
+## Inputs
+
+| Name | Required | Default | Notes |
+|---|---|---|---|
+| `function_name` | yes | — | Already carries the naming prefix. Also names the log group and the role. Capped at 64 characters, validated |
+| `source_file` | yes | — | Path to the single `.py` file that becomes the package |
+| `handler` | no | `handler.handler` | Correct for one file named `handler.py`, which `archive_file` places at the zip root |
+| `environment` | no | `{}` | The whole of a hook's per-instance configuration. Omitted from the function entirely when empty |
+| `timeout_seconds` | no | `60` | On a synchronous deployment gate this bounds how long a stage can hang |
+| `memory_size_mb` | no | `128` | The floor, and ample for three HTTP requests |
+| `log_retention_days` | no | `14` | |
+
+## Outputs
+
+`function_arn`, `function_name`, `log_group_name`, `role_arn` — the identifiers
+a caller wires into other resources.
+
+`runtime`, `architectures`, `timeout_seconds`, `environment_variables` — the
+function's *resolved* configuration, exposed for one reason: a module's resources
+are not reachable from a `.tftest.hcl` file, only its outputs are. Without these
+the calling layer cannot assert which listener each hook probes, and that is the
+worst thing in this layer to get wrong.
+
+## Single-file packaging is the design, not a limitation to work around
+
+`archive_file` over one source file is what keeps the offline gate honest.
+`mock_provider "aws"` does not mock the `archive` provider, so during
+`terraform test` the zip is **really built** from the handler on disk — the gate
+proves the packaging works instead of mocking away the step most likely to be
+misconfigured, and it fails loudly if the source path is wrong. That property is
+only available because the handler needs no dependencies.
+
+`output_file_mode = "0644"` is set for a related reason: without it the archived
+file inherits the mode it happens to have on the machine that ran the plan, so a
+clone with a different umask produces a different hash and `terraform plan` shows
+a redeploy that changes nothing.
+
+**Phase 9 will need a variant if the metrics collector uses boto3.** A
+dependency-bearing package cannot be expressed as `archive_file` over a single
+file — it needs either a `source_dir` with vendored dependencies, a layer, or a
+build step. That is a change to make deliberately in the phase that needs it,
+not a generalisation to guess at now.
+
+## Why it has no test suite of its own
+
+It has no logic: no conditionals beyond one `dynamic` block that omits an empty
+environment, no `for_each`, no computed names. The calling layer's assertions on
+three real instantiations
+([`prod/tests/bluegreen.tftest.hcl`](../../environments/prod/tests/bluegreen.tftest.hcl))
+test everything it does. A suite over a module with no branches asserts that
+Terraform works.
+
+If Phase 9 adds branching for dependency-bearing packages, that phase adds the
+tests.

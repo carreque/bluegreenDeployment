@@ -27,6 +27,7 @@ AWS_PROFILE := bootcamp-administrator-access
 AWS_REGION  := us-east-1
 AWS_ACCOUNT_ID := 590184028094
 APP_DIR := app
+LAMBDA_DIR := lambdas
 VENV    := $(CURDIR)/$(APP_DIR)/.venv
 PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
@@ -106,13 +107,20 @@ local-down: ## Stop DynamoDB Local and discard its data
 test: deps local-up ## Run the application test suite with coverage
 	@cd $(APP_DIR) && $(PY) -m pytest
 
+# Both trees, in one pass each. lambdas/ carries its own pyproject.toml rather
+# than an entry in app's: app's pythonpath, testpaths and coverage source all
+# describe the service, and none of the three is right for a handler that is
+# never pip-installed. Running ruff from each directory is what lets each tree's
+# own config apply.
 .PHONY: lint
-lint: deps ## Ruff lint and format check
+lint: deps ## Ruff lint and format check (app/ and lambdas/)
 	@cd $(APP_DIR) && $(RUFF) check . && $(RUFF) format --check .
+	@cd $(LAMBDA_DIR) && $(RUFF) check . && $(RUFF) format --check .
 
 .PHONY: format
-format: deps ## Apply ruff formatting and safe fixes
+format: deps ## Apply ruff formatting and safe fixes (app/ and lambdas/)
 	@cd $(APP_DIR) && $(RUFF) check --fix . && $(RUFF) format .
+	@cd $(LAMBDA_DIR) && $(RUFF) check --fix . && $(RUFF) format .
 
 # PYTHONPATH=src, because the package is deliberately never pip-installed.
 # pytest gets there via `pythonpath = ["src"]` in pyproject.toml, but that
@@ -166,11 +174,13 @@ run-image: build local-tables ## Run the built image against DynamoDB Local on :
 # logged in. Only plan and apply reach the account. See
 # docs/phases/phase3/2026-08-24-phase-03-implementation-plan.md §F2.
 #
-# Add a layer here as the phase that creates it lands: network (4),
-# staging (5), prod (6).
+# Every layer is listed: network (4), staging (5) and prod (6) each joined as
+# the phase that created it landed. scripts/lint-infra.sh and scripts/tf.sh
+# already carry the layer-name-to-directory mapping, so this list is the only
+# place a new layer has to be declared.
 # ---------------------------------------------------------------------------
 
-TF_LAYERS := bootstrap foundation network staging
+TF_LAYERS := bootstrap foundation network staging prod
 
 .PHONY: tf-fmt
 tf-fmt: ## Format every Terraform file in place
@@ -233,5 +243,21 @@ verify-network: ## Prove a private subnet egresses through the NAT (needs an AWS
 # LISTED: smoke-ENV      Smoke test an environment over TLS (needs an AWS session)
 smoke-%: FORCE
 	@./scripts/smoke.sh $*
+
+# ---------------------------------------------------------------------------
+# Phase 6 — production and blue/green
+# ---------------------------------------------------------------------------
+
+# The lifecycle hook handler's suite. Separate from `test` rather than folded
+# into it: lambdas/ has its own pyproject.toml, its own coverage source and a
+# higher gate (95%, against app's 90), and `make test` additionally needs
+# docker for DynamoDB Local while this needs nothing at all.
+#
+# deps because the suite needs the virtualenv's pytest; $(PY) by absolute path
+# for the same reason every Phase 1 recipe does it — `python3` on PATH is only
+# 3.14.6 when make's parent was an interactive zsh (Phase 0 §B).
+.PHONY: test-lambdas
+test-lambdas: deps ## Run the Lambda handler suite
+	@cd $(LAMBDA_DIR) && $(PY) -m pytest
 
 # PLANNED: rebuild        Apply network then staging then prod (Phase 10)

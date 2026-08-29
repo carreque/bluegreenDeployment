@@ -111,6 +111,26 @@ Decided with you on 2026-08-28. checkov `CKV_AWS_91` is skipped rather than sati
 - Enabling it would have meant either reopening `foundation` to add a bucket policy for the ELB service principal — a cross-layer edit this phase otherwise avoids entirely — or adding a bucket, a policy and lifecycle rules to the layer whose whole point is being cheap and disposable.
 - **Phase 6 decides independently.** In production, access logs are genuine blue/green evidence: they record which target group served which request. This skip is scoped to staging and says so.
 
+> **Answered in Phase 6 (2026-08-29): still off, and the premise above was
+> wrong.** This entry promised a fresh decision for production and predicted the
+> answer would be yes, because "access logs are genuine blue/green evidence".
+> Having looked at what the evidence actually has to be, they are not.
+>
+> The three exit criteria are met by `/version` on `:443` versus `:8443` during
+> a deployment, the ECS deployment-stage transitions, and the hook Lambdas' own
+> log output — all available within seconds. ALB access logs are delivered to S3
+> on a roughly five-minute lag, which is **longer than the deployment they would
+> document**: they would arrive after the thing they record had finished. And
+> enabling them still requires either a bucket policy in `foundation`, a layer
+> Phase 6 was equally scoped not to touch, or a bucket in `prod` that
+> `make teardown` destroys along with every log in it.
+>
+> See [the Phase 6 plan](../phase6/2026-08-28-phase-06-implementation-plan.md)'s
+> D7. The reason is written out in full in `infra/environments/prod/alb.tf`'s
+> `CKV_AWS_91` skip rather than pointing back here, because production is the
+> layer where a reviewer is most entitled to see the reasoning without following
+> a link.
+
 #### D6 — DynamoDB point-in-time recovery is off, with a written reason
 
 Decided with you on 2026-08-28. checkov `CKV_AWS_28` is skipped.
@@ -120,6 +140,15 @@ Decided with you on 2026-08-28. checkov `CKV_AWS_28` is skipped.
 - These tables are destroyed by `make teardown` and recreated empty by a rebuild. There is no point in time anyone would want to recover to.
 - Deletion protection is off for the same reason, and that one is not optional: `deletion_protection_enabled = true` would make `terraform destroy` fail on this layer and break the teardown policy the five-layer split exists to serve.
 - Phase 6 decides independently for production, where the answer is likely different.
+
+> **Answered in Phase 6 (2026-08-29): the same, and for the same reason.** The
+> production tables are destroyed by `make teardown` and recreated empty by a
+> rebuild exactly as staging's are, so there is still no point in time worth
+> recovering to. "Production" here names an environment in a demonstration
+> project, not a system holding data anyone would miss — and deletion protection
+> stays off on both tables for the reason above, which is not optional if
+> `make teardown` is to work at all. `infra/environments/prod/dynamodb.tf`
+> carries both skips, pointing at this entry.
 
 #### D7 — Container Insights is explicitly disabled, not omitted
 

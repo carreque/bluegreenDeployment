@@ -1,0 +1,36 @@
+[project]
+name = "bgd-lambdas"
+version = "0.0.0"
+description = "Blue/green lifecycle hooks and, from Phase 9, the metrics collector"
+requires-python = ">=3.14"
+
+# No [build-system]: these are never pip-installed. Lambda unzips handler.py
+# next to its own runtime, and the tests reach it through pythonpath below.
+# Matches app/pyproject.toml's reasoning exactly.
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config --cov --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["lifecycle_hook"]
+branch = true
+
+[tool.coverage.report]
+# Above app's 90. The handler is one file of roughly eighty lines that gates
+# production deployments; there is no part of it that should go untested.
+fail_under = 95
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+# target-version is deliberately omitted: ruff infers it from
+# project.requires-python above, so the Python version is stated once.
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "S", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101 assert-used: asserts are the point of a test.
+"tests/**" = ["S101"]
