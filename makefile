@@ -301,6 +301,13 @@ test-scripts: ## Run the shell suite for scripts/ (no AWS session needed)
 verify-idle: ## Prove nothing billable survives; SCOPE=prod|staging|network (needs an AWS session)
 	@./scripts/verify-idle.sh
 
+# The way back. Reads image_tag from SSM rather than terraform.tfvars, which is
+# the difference between restoring what was deployed and deploying whatever
+# happens to be in a gitignored file. Plan §D10.
+.PHONY: rebuild
+rebuild: ## Apply network, staging and prod, then smoke both; SCOPE=network|staging|prod (needs an AWS session)
+	@./scripts/rebuild.sh
+
 # ---------------------------------------------------------------------------
 # Phase 8 — application pipeline
 # ---------------------------------------------------------------------------
@@ -314,4 +321,3 @@ verify-idle: ## Prove nothing billable survives; SCOPE=prod|staging|network (nee
 push-image: ## Push the built image into ECR without recording it as deployed (needs an AWS session)
 	@./scripts/push-image.sh
 
-# PLANNED: rebuild        Apply network then staging then prod (Phase 10)

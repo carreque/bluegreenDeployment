@@ -88,4 +88,70 @@ for service in ec2 elasticloadbalancing ecs dynamodb; do
     "$(if grep -q "$service" "$IDLE"; then echo 0; else echo 1; fi)"
 done
 
+# --- rebuild -----------------------------------------------------------------
+
+REBUILD="$ROOT/scripts/rebuild.sh"
+
+run_capture env SCOPE=sideways "$REBUILD"
+check          "an unrecognised SCOPE is fatal"  "1" "$STATUS"
+check_contains "…listing the three it accepts"   "expected one of network, staging, prod" "$OUTPUT"
+
+# foundation is not a rebuild target: it survived the teardown, by construction.
+run_capture env SCOPE=foundation "$REBUILD"
+check "SCOPE=foundation is refused" "1" "$STATUS"
+
+# Every case below runs with BGD_REBUILD_DRY_RUN=1, which stops AFTER the
+# preconditions and before the first apply. That is what lets the suite exercise
+# all six preconditions without terraform ever being invoked — and it is why
+# the flag stops where it does rather than before them.
+export FAKE_SSM_IMAGE_TAG=1.0.0-abc1234
+
+run_capture env SCOPE=network BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check          "a dry run exits 0"                     "0" "$STATUS"
+check_contains "…listing what it would apply"          "network" "$OUTPUT"
+check_contains "…and the marker value it would record" "/bgd/platform/deployed_scope = network" "$OUTPUT"
+check_contains "…having actually checked something"    "preconditions pass" "$OUTPUT"
+
+run_capture env SCOPE=prod BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check_contains "the default applies network first"  "network" "$OUTPUT"
+check_contains "…then staging"                      "staging" "$OUTPUT"
+check_contains "…then prod"                         "prod"    "$OUTPUT"
+check_contains "…finishing at the marker value all" "/bgd/platform/deployed_scope = all" "$OUTPUT"
+
+# The account check is first, because a rebuild into the wrong account is not
+# recoverable by re-running it. Plan §D10.
+export FAKE_ACCOUNT_ID=111122223333
+run_capture env SCOPE=network BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check          "a wrong account is fatal"     "1" "$STATUS"
+check_contains "…naming both account numbers" "111122223333" "$OUTPUT"
+unset FAKE_ACCOUNT_ID
+
+export FAKE_S3_MISSING=1
+run_capture env SCOPE=network BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check          "an unreachable state bucket is fatal" "1" "$STATUS"
+check_contains "…and names it"  "bgd-us-east-1-tfstate" "$OUTPUT"
+unset FAKE_S3_MISSING
+
+# An unset image tag is caught before the NAT gateway exists, not at the
+# staging layer after it does. Plan §D10.
+export FAKE_SSM_IMAGE_TAG=unset
+run_capture env SCOPE=staging BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check          "an unset image tag is fatal" "1" "$STATUS"
+check_contains "…and says how to set it"     "make seed-ecr" "$OUTPUT"
+export FAKE_SSM_IMAGE_TAG=1.0.0-abc1234
+
+# The check that moves the failure from after the NAT gateway to before it.
+export FAKE_ECR_MISSING=1
+run_capture env SCOPE=staging BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check          "a tag that is not in ECR is fatal"   "1" "$STATUS"
+check_contains "…and says why it is caught here"     "after the network already exists and is billing" "$OUTPUT"
+unset FAKE_ECR_MISSING
+
+# SCOPE=network needs no image tag at all — there is no container in that layer,
+# so an absent parameter must not stop a network-only rebuild.
+export FAKE_SSM_IMAGE_TAG=""
+run_capture env SCOPE=network BGD_REBUILD_DRY_RUN=1 "$REBUILD"
+check "SCOPE=network needs no image tag" "0" "$STATUS"
+unset FAKE_SSM_IMAGE_TAG
+
 report
