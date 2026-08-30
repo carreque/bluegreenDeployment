@@ -275,3 +275,94 @@ layer_dir() {
     *) die "unknown layer: $1 (expected bootstrap, foundation, network, staging or prod)" ;;
   esac
 }
+
+# The four values /bgd/platform/deployed_scope holds, ranked. The SAME four
+# DEPLOY_SCOPE uses, deliberately — pipeline-terraform.sh already ranks them and
+# foundation/locals.tf already orders them, so a second vocabulary for the same
+# idea would be a second thing to keep in step. Plan §D2.
+#
+# Named platform_scope_rank rather than scope_rank because pipeline-deploy.sh
+# defines a scope_rank of its own over build/staging/all, and bash redefines a
+# function silently. Plan §F7.
+#
+# An unrecognised value ranks 0, below every layer, so it can only ever produce
+# "nothing is deployed" rather than a partial and unintended one.
+platform_scope_rank() {
+  case "$1" in
+    foundation) echo 1 ;;
+    network) echo 2 ;;
+    staging) echo 3 ;;
+    all) echo 4 ;;
+    *) echo 0 ;;
+  esac
+}
+
+# The layers, ranked on the same scale. `all` is not a layer, so it ranks 99
+# here — above every scope — which is what makes an unknown name skip rather
+# than apply.
+platform_layer_rank() {
+  case "$1" in
+    foundation) echo 1 ;;
+    network) echo 2 ;;
+    staging) echo 3 ;;
+    prod) echo 4 ;;
+    *) echo 99 ;;
+  esac
+}
+
+min_rank() {
+  if (($1 < $2)); then echo "$1"; else echo "$2"; fi
+}
+
+# The marker: how deep the platform is currently applied.
+#
+# Written ONLY by scripts/teardown.sh and scripts/rebuild.sh, and defaulted to
+# `all` by Terraform so that it can only ever restrict, and only after somebody
+# explicitly ran a teardown. It is a teardown marker, not a deployment registry:
+# it does not know that `make apply-prod` was run by hand. Plan §D2 and §D4.
+DEPLOYED_SCOPE_PARAM="/bgd/platform/deployed_scope"
+
+# read_deployed_scope — the marker's current value, on stdout.
+#
+# Dies rather than assuming `all` on a read failure, and that is the decision
+# rather than an oversight: assuming `all` would mean a lost ssm:GetParameter
+# permission silently restores the behaviour the marker exists to remove, with
+# nothing anywhere reporting it. Plan §D6.
+read_deployed_scope() {
+  local value
+  value="$(aws ssm get-parameter \
+    --region "${AWS_REGION:-us-east-1}" \
+    --name "$DEPLOYED_SCOPE_PARAM" \
+    --query 'Parameter.Value' --output text 2>/dev/null)" ||
+    die "cannot read $DEPLOYED_SCOPE_PARAM — apply the foundation layer, which is what creates it"
+
+  (($(platform_scope_rank "$value") > 0)) ||
+    die "$DEPLOYED_SCOPE_PARAM is '$value'; expected one of foundation, network, staging, all"
+
+  printf '%s' "$value"
+}
+
+# write_deployed_scope <value> — record how deep the platform is applied.
+#
+# The read first is not a courtesy check. `put-parameter --overwrite` CREATES a
+# parameter that does not exist, so without it a write against an account where
+# foundation was never applied would create one outside Terraform's state — and
+# the next foundation apply would fail on a name that already exists. Plan §F5.
+write_deployed_scope() {
+  local value="$1"
+
+  (($(platform_scope_rank "$value") > 0)) ||
+    die "refusing to write '$value' to $DEPLOYED_SCOPE_PARAM; expected one of foundation, network, staging, all"
+
+  read_deployed_scope >/dev/null
+
+  aws ssm put-parameter \
+    --region "${AWS_REGION:-us-east-1}" \
+    --name "$DEPLOYED_SCOPE_PARAM" \
+    --value "$value" \
+    --type String \
+    --overwrite >/dev/null ||
+    die "could not write $DEPLOYED_SCOPE_PARAM"
+
+  ok "$DEPLOYED_SCOPE_PARAM now records $value"
+}
