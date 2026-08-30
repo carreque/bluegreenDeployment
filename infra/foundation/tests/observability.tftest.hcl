@@ -34,6 +34,7 @@ mock_provider "aws" {
   mock_resource "aws_sns_topic" {
     defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
   }
+
 }
 
 # command = apply plans and applies the WHOLE root module, not just the
@@ -100,6 +101,21 @@ override_resource {
 override_resource {
   target = module.release_metrics.aws_iam_role.this
   values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-release-metrics-exec-role" }
+}
+
+override_resource {
+  target = module.release_metrics.aws_lambda_function.this
+  values = { arn = "arn:aws:lambda:us-east-1:590184028094:function:bgd-us-east-1-release-metrics" }
+}
+
+override_resource {
+  target = aws_cloudwatch_event_rule.pipeline_executions
+  values = { arn = "arn:aws:events:us-east-1:590184028094:rule/bgd-us-east-1-pipeline-executions" }
+}
+
+override_resource {
+  target = aws_cloudwatch_event_rule.prod_deployments
+  values = { arn = "arn:aws:events:us-east-1:590184028094:rule/bgd-us-east-1-prod-deployments" }
 }
 
 run "the_collector_is_packaged_and_runs_on_the_pinned_runtime" {
@@ -175,5 +191,94 @@ run "the_collector_may_write_only_its_own_namespace" {
       ])
     ])
     error_message = "the collector reads pipeline executions; it must not be able to act on one"
+  }
+}
+
+run "the_pipeline_rule_watches_both_pipelines_and_only_the_terminal_states" {
+  command = apply
+
+  assert {
+    condition     = jsondecode(aws_cloudwatch_event_rule.pipeline_executions.event_pattern)["detail-type"] == ["CodePipeline Pipeline Execution State Change"]
+    error_message = "the pipeline rule must match execution state changes, not stage or action ones"
+  }
+
+  assert {
+    condition = toset(jsondecode(aws_cloudwatch_event_rule.pipeline_executions.event_pattern).detail.pipeline) == toset([
+      aws_codepipeline.infra.name,
+      aws_codepipeline.app.name,
+    ])
+    error_message = "both pipelines, named rather than wildcarded"
+  }
+
+  # SUCCEEDED for lead time and MTTR, FAILED for the alert. STARTED and
+  # SUPERSEDED would invoke the collector for nothing — and unlike the ECS
+  # rule there is no unknown vocabulary here to leave room for, because
+  # CodePipeline's execution states are a documented closed set.
+  assert {
+    condition     = toset(jsondecode(aws_cloudwatch_event_rule.pipeline_executions.event_pattern).detail.state) == toset(["SUCCEEDED", "FAILED"])
+    error_message = "the pipeline rule matches SUCCEEDED and FAILED only"
+  }
+}
+
+run "the_deployment_rule_names_the_production_service_and_does_not_filter_event_names" {
+  command = apply
+
+  assert {
+    condition = jsondecode(aws_cloudwatch_event_rule.prod_deployments.event_pattern).resources == [
+      "arn:aws:ecs:us-east-1:590184028094:service/bgd-us-east-1-prod-cluster/bgd-us-east-1-prod-api"
+    ]
+    error_message = "the deployment rule must name the production service exactly; staging deployments are not release metrics (plan D15)"
+  }
+
+  # Plan §D4, and the single assertion most worth having in this file. Which
+  # eventName a blue/green rollback produces is a runtime contract with no
+  # offline source of truth (§F3). A filter here that guesses wrong makes the
+  # rollback this project exists to demonstrate produce no metric and no email,
+  # with the rule still looking correct in the console.
+  # Asserted against the raw pattern string rather than the decoded object,
+  # deliberately. The correct pattern has no `detail` key at all, so
+  # jsondecode(...).detail is an error rather than a null — an assertion written
+  # that way fails on the configuration it is meant to pass.
+  assert {
+    condition     = !strcontains(aws_cloudwatch_event_rule.prod_deployments.event_pattern, "eventName")
+    error_message = "the deployment rule must not filter on eventName — an unrecognised name has to reach the handler and be logged (plan D4)"
+  }
+}
+
+run "both_targets_bound_delivery_and_both_permissions_name_their_own_rule" {
+  command = apply
+
+  # Plan §F11. Unset, EventBridge retries for 24 hours across 185 attempts: a
+  # "deployment failed" email arriving tomorrow, and a broken collector invoked
+  # all day.
+  assert {
+    condition = alltrue([
+      for target in [
+        aws_cloudwatch_event_target.pipeline_executions,
+        aws_cloudwatch_event_target.prod_deployments,
+      ] : one(target.retry_policy).maximum_retry_attempts == 2 && one(target.retry_policy).maximum_event_age_in_seconds == 300
+    ])
+    error_message = "both targets must bound retries to three attempts over five minutes"
+  }
+
+  # Crossed source_arns is the failure this catches: both permissions would
+  # still apply, both rules would still fire, and nothing would ever report it —
+  # until someone removed one rule and the other stopped working.
+  assert {
+    condition = (
+      aws_lambda_permission.pipeline_executions.source_arn == aws_cloudwatch_event_rule.pipeline_executions.arn &&
+      aws_lambda_permission.prod_deployments.source_arn == aws_cloudwatch_event_rule.prod_deployments.arn
+    )
+    error_message = "each permission must be scoped to the rule it exists for"
+  }
+
+  assert {
+    condition = alltrue([
+      for permission in [
+        aws_lambda_permission.pipeline_executions,
+        aws_lambda_permission.prod_deployments,
+      ] : permission.principal == "events.amazonaws.com" && permission.function_name == module.release_metrics.function_name
+    ])
+    error_message = "both permissions must let EventBridge, and only EventBridge, invoke the collector"
   }
 }

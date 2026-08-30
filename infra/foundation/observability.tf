@@ -98,3 +98,93 @@ resource "aws_iam_role_policy" "release_metrics" {
     ]
   })
 }
+
+# --- what reaches the collector ----------------------------------------------
+
+resource "aws_cloudwatch_event_rule" "pipeline_executions" {
+  name = "${local.name_prefix}-pipeline-executions"
+  description = join(" ", [
+    "Both pipelines' terminal execution states, for the failure alert and for",
+    "lead time. SUCCEEDED and FAILED only: CodePipeline's execution states are",
+    "a documented closed set, so unlike the ECS rule there is no unknown",
+    "vocabulary to leave room for.",
+  ])
+
+  event_pattern = jsonencode({
+    source        = ["aws.codepipeline"]
+    "detail-type" = ["CodePipeline Pipeline Execution State Change"]
+    detail = {
+      # Named rather than wildcarded. This account holds one project today; a
+      # pattern that matched every pipeline would silently start counting
+      # someone else's the day it does not.
+      pipeline = [aws_codepipeline.infra.name, aws_codepipeline.app.name]
+      state    = ["SUCCEEDED", "FAILED"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "prod_deployments" {
+  name = "${local.name_prefix}-prod-deployments"
+  description = join(" ", [
+    "Every ECS deployment state change on the production service. Deliberately",
+    "unfiltered by eventName — which names a blue/green rollback emits is a",
+    "runtime contract with no offline source of truth, and a wrong guess would",
+    "make rollbacks invisible. Plan D4 and F3.",
+  ])
+
+  event_pattern = jsonencode({
+    source        = ["aws.ecs"]
+    "detail-type" = ["ECS Deployment State Change"]
+
+    # The service ARN, composed from this layer's own convention variables
+    # rather than read from prod's remote state — plan §D2. Staging's service is
+    # deliberately absent: staging is built to fail fast, and counting its
+    # deployments would inflate frequency and deflate change failure rate at the
+    # same time (plan §D15).
+    resources = [local.observability.prod_service_arn]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "pipeline_executions" {
+  rule      = aws_cloudwatch_event_rule.pipeline_executions.name
+  target_id = "release-metrics"
+  arn       = module.release_metrics.function_arn
+
+  # Plan §F11: unset, this is 185 attempts across 24 hours. Three attempts
+  # inside five minutes is what an alert is worth, and after that the collector's
+  # Errors alarm has already said so.
+  retry_policy {
+    maximum_retry_attempts       = 2
+    maximum_event_age_in_seconds = 300
+  }
+}
+
+resource "aws_cloudwatch_event_target" "prod_deployments" {
+  rule      = aws_cloudwatch_event_rule.prod_deployments.name
+  target_id = "release-metrics"
+  arn       = module.release_metrics.function_arn
+
+  retry_policy {
+    maximum_retry_attempts       = 2
+    maximum_event_age_in_seconds = 300
+  }
+}
+
+# One permission per rule rather than one covering both. source_arn takes a
+# single ARN, and a permission scoped to one rule is what makes "this rule may
+# invoke the collector" a statement rather than "EventBridge may".
+resource "aws_lambda_permission" "pipeline_executions" {
+  statement_id  = "AllowInvocationFromPipelineExecutionsRule"
+  action        = "lambda:InvokeFunction"
+  function_name = module.release_metrics.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.pipeline_executions.arn
+}
+
+resource "aws_lambda_permission" "prod_deployments" {
+  statement_id  = "AllowInvocationFromProdDeploymentsRule"
+  action        = "lambda:InvokeFunction"
+  function_name = module.release_metrics.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.prod_deployments.arn
+}
