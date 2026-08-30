@@ -89,13 +89,47 @@ resource "aws_iam_role_policy" "this" {
 # general-purpose Lambda, and each reason below says why rather than pointing at
 # another layer.
 #
-# PHASE 9 MUST RE-EXAMINE THEM. These suppressions live on the module, so a
-# metrics collector added here inherits every one of them. A function that calls
-# boto3, writes CloudWatch metrics and runs on a schedule has a different answer
-# to at least the DLQ and concurrency questions than a synchronous gate does.
+# PHASE 9 RE-EXAMINED THEM, against a second function this module now
+# packages: the release metrics collector, invoked asynchronously by
+# EventBridge rather than synchronously by the ECS deployment controller. Five
+# of the six held for both invocation shapes; one did not.
+#
+#   CKV_AWS_116 (DLQ)       changed. The old reason rested on the hooks being
+#                           synchronous — no dropped event for a queue to
+#                           catch. EventBridge invocations can be dropped, so
+#                           the collector needed its own argument, above: the
+#                           Errors alarm and bounded EventBridge retries stand
+#                           in for a queue nothing would poll.
+#   CKV_AWS_50 (X-Ray)      still holds. The collector's four boto3 calls are
+#                           each already logged with their outcome, the same
+#                           substitute a trace would add a sampling charge to
+#                           duplicate.
+#   CKV_AWS_115 (reserved
+#   concurrency)            still holds. The collector's concurrency is bounded
+#                           by deployments and pipeline executions, both rare,
+#                           the same shape of bound the hooks have from the
+#                           deployment controller.
+#   CKV_AWS_117 (VPC)       still holds. The collector's dependencies —
+#                           CloudWatch, SNS, CodePipeline — are public API
+#                           endpoints, same as the hooks' probe target.
+#   CKV_AWS_173 (env
+#   encryption)             still holds. The collector's environment holds a
+#                           namespace, a topic ARN and two pipeline names — all
+#                           public facts about this account, the same
+#                           publicness argument the hooks make about their URL
+#                           and digest.
+#   CKV_AWS_272 (code
+#   signing)                still holds. The collector's zip is built by
+#                           data.archive_file in the same apply as the hooks',
+#                           so the same argument about there being no unsigned
+#                           upload path applies unchanged.
+#
+# A function with a materially different profile from both of these — one that
+# takes a network attachment, a third-party dependency or a secret — would need
+# its own re-examination rather than inheriting this one.
 resource "aws_lambda_function" "this" {
   # checkov:skip=CKV_AWS_50:X-Ray traces a request as it crosses services. This function calls exactly one thing, over plain urllib, and already logs the stage, the URL, the probe outcome and the digest it saw. A trace would add a sampling charge and a segment for a call the log line already describes in full, and the thing an operator actually needs after a rejected deployment is the exception message naming the path and status — which is in CloudWatch, not in a trace.
-  # checkov:skip=CKV_AWS_116:a dead letter queue captures asynchronous invocations that failed after retries. These are invoked SYNCHRONOUSLY by the ECS deployment controller, which is itself the consumer of the result — a failure is delivered to ECS as an invocation error and becomes a rejected deployment stage (plan D3), which is the entire point. There is no dropped event for a DLQ to catch, and a queue here would collect nothing while suggesting to a reader that failures are handled somewhere other than the deployment itself.
+  # checkov:skip=CKV_AWS_116:a dead letter queue captures asynchronous invocations that failed after retries, and this module now packages both shapes. The three lifecycle hooks are invoked SYNCHRONOUSLY by the ECS deployment controller, which is itself the consumer of the result — there is no dropped event for a queue to catch. Phase 9's collector IS invoked asynchronously, by EventBridge, so dropped invocations are real; it still takes no queue, because nothing in this project polls one. A DLQ here would accumulate events no process ever reads while suggesting to the next reader that they are handled. What handles them is the collector's own Errors alarm, which publishes to the alert topic within a minute, plus retry_policy on both EventBridge targets bounding delivery to three attempts over five minutes rather than the 185-attempt, 24-hour default. Phase 9 plan §D11.
   # checkov:skip=CKV_AWS_115:reserved concurrency protects the rest of the account from one function exhausting the pool. Concurrency here is bounded by the deployment controller, not by load: at most three invocations per deployment, sequential across stages, and deployments do not overlap. Reserving concurrency would instead introduce a new failure mode — a deployment gate throttled by its own reservation fails closed, and D3 turns that into the rejection of a build that was fine.
   # checkov:skip=CKV_AWS_117:not VPC-attached, deliberately. The production ALB is internet-facing and network already opens :8443 on the prod ALB security group, so both listeners are reachable over the public internet either way — a private ENI would buy no isolation. It would cost an ENI per concurrent execution, an ENI attachment delay on cold start INSIDE a synchronous deployment gate, and a NAT dependency for a function whose whole job is to run while the deployment is in a fragile state. A VPC-attached hook would need NAT egress to reach its own ALB and would fail closed during exactly the deployments it exists to gate. Plan §D6.
   # checkov:skip=CKV_AWS_173:the environment holds a probe URL, a stage name, and — only when the runbook sets it by hand — an expected image digest. Every one of those is a public fact about a public API; the URL is in DNS and the digest is served at /version. A customer-managed key would bill a Decrypt call per cold start to protect information that is already published, and would add a key whose deletion breaks every deployment.
