@@ -11,7 +11,7 @@ instantiated by [`infra/environments/prod/hooks.tf`](../infra/environments/prod/
 | Package | Phase | What it is |
 |---|---|---|
 | `lifecycle_hook/` | 6 | The three ECS blue/green lifecycle hooks |
-| _the metrics collector_ | 9 | Deployment frequency, lead time, change failure rate, MTTR |
+| `release_metrics/` | 9 | Deployment frequency, lead time, change failure rate, MTTR |
 
 ## `lifecycle_hook`
 
@@ -88,9 +88,71 @@ the deployment zip is one file, `data.archive_file` builds it during
 `terraform test` with no network access, and this test suite needs nothing the
 existing `app/.venv` does not already have.
 
-Phase 9's metrics collector will need boto3, and `archive_file` over a single
-source file cannot express a dependency-bearing package — that phase adds the
-variant, and this note is where it should start.
+## `release_metrics`
+
+One handler, two EventBridge sources: production ECS deployment state changes
+and both pipelines' execution state changes. It writes the `ReleaseMetrics`
+series behind the dashboard and publishes the alerts worth an email — see
+[infra/foundation/observability.tf](../infra/foundation/observability.tf) for
+what creates and wires it, and the [Phase 9
+plan](../docs/phases/phase9/2026-08-30-phase-09-implementation-plan.md)'s D3
+through D9 for the reasoning behind each choice below.
+
+### Environment
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `BGD_METRIC_NAMESPACE` | no, default `ReleaseMetrics` | CloudWatch namespace every metric is written under |
+| `BGD_ENVIRONMENT` | no, default `prod` | The `Environment` dimension on every deployment-outcome metric |
+| `BGD_MTTR_LOOKBACK_DAYS` | no, default 30 | How far back `GetMetricData` looks for an unrecovered failure |
+| `BGD_ALERT_TOPIC_ARN` | yes (logged and dropped if absent, never raised on) | Where failure and rollback emails go |
+| `BGD_APP_PIPELINE` | yes | Which pipeline's `SUCCEEDED` state change triggers a lead-time emission — the infra pipeline succeeding means nothing was deployed to production |
+
+The first three have defaults, which is precisely why they are asserted in
+`infra/foundation/tests/observability.tftest.hcl` rather than trusted: a
+missing one is silent, not fatal, and a silent wrong namespace means metrics
+land somewhere real while the dashboard stays empty.
+
+### The return contract, and why it is the opposite of `lifecycle_hook`'s
+
+**On a recognised event it returns a `{"handled": True, …}` dictionary. On an
+event it does not recognise — an unrecognised `source`, an ECS `eventName`
+outside the known sets, a CodePipeline state that is neither `SUCCEEDED` nor
+`FAILED` — it also returns, `{"handled": False, …}`, logged at `INFO` or
+`WARNING`. It raises only when an AWS call it actually needs — `PutMetricData`,
+`GetMetricData`, `sns:Publish`, `GetPipelineExecution` — fails.**
+
+Read the section above this one before concluding that is an inconsistency:
+`lifecycle_hook` raises when in doubt because its failure mode is *promoting a
+bad build*. This handler's failure mode, if it raised the same way, is
+different in kind. It is invoked **asynchronously** by EventBridge, whose
+retry policy here is `maximum_retry_attempts = 2` over five minutes — an
+exception is retried, then fires the collector's own `Errors` alarm, then
+emails you. The ECS rule is deliberately unfiltered on `eventName` (design
+§8's D4): every deployment fires a `SERVICE_DEPLOYMENT_IN_PROGRESS` event this
+handler has no opinion about, on purpose, so that a rollback-shaped event it
+was never told to expect still reaches it rather than being filtered out
+upstream. If the handler raised on every shape it merely does not recognise,
+those routine in-progress events would retry and alert continuously — the
+alarm that exists to say "the collector is broken" would fire nonstop while
+the collector worked exactly as designed.
+
+So the two contracts point in opposite directions for the same underlying
+reason: each raises exactly when raising is the safe response to *its own*
+invocation model, synchronous-and-gating for one, asynchronous-and-retried for
+the other. `tests/test_release_metrics.py` has a case naming this directly —
+an unrecognised source, event name and pipeline state each return cleanly
+rather than raise, and a failing `put_metric_data` call does raise.
+
+### boto3 only, from the managed runtime
+
+`boto3` and `botocore` ship in every AWS Lambda managed Python runtime, so
+this package still needs nothing vendored: `archive_file` over the single
+`handler.py` still expresses the whole deployment package, and `terraform
+test` still really builds the zip with no network access — see
+[`infra/modules/lambda/README.md`](../infra/modules/lambda/README.md) for why
+that property mattered enough to check before assuming it would need to
+change.
 
 ## Running the tests
 

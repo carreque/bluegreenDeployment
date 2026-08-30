@@ -66,20 +66,57 @@ file inherits the mode it happens to have on the machine that ran the plan, so a
 clone with a different umask produces a different hash and `terraform plan` shows
 a redeploy that changes nothing.
 
-**Phase 9 will need a variant if the metrics collector uses boto3.** A
-dependency-bearing package cannot be expressed as `archive_file` over a single
-file — it needs either a `source_dir` with vendored dependencies, a layer, or a
-build step. That is a change to make deliberately in the phase that needs it,
-not a generalisation to guess at now.
+**Phase 9 needed no variant.** This README predicted one on the assumption
+that the metrics collector's use of `boto3` would force a dependency-bearing
+package. It does not: `boto3` and `botocore` ship in every AWS Lambda managed
+Python runtime, so the collector's imports — `boto3`, `json`, `logging`, `os`,
+`datetime` — are nothing this module has to vendor. `archive_file` over the
+single `lambdas/release_metrics/handler.py` still expresses the whole
+package, and `terraform test` still really builds that zip against a mocked
+provider — the exact property this section calls "the design", now proven
+under the one case that was supposed to require an exception rather than
+assumed to survive it. The accepted cost is that the collector runs whatever
+`boto3` version the runtime happens to ship, which AWS can change without
+notice; for four API calls whose signatures predate this project by a decade
+(`put_metric_data`, `get_metric_data`, `publish`, `get_pipeline_execution`),
+that is not worth a vendoring step, a layer or a build. See the Phase 9 plan's
+D10 and F2.
+
+### The six checkov skips, re-examined for an asynchronous invoker
+
+`main.tf` carried a note telling Phase 9 to re-examine its six suppressions,
+because a metrics collector added to this module inherits every one of them.
+Five hold unchanged for the same reasons Phase 6 gave — one urllib call is
+already logged in full (`CKV_AWS_50`), concurrency is bounded by how rarely
+deployments and pipeline executions happen (`CKV_AWS_115`), CloudWatch, SNS
+and CodePipeline are public API endpoints reachable with no VPC (`CKV_AWS_117`),
+the environment variables carry no secret (`CKV_AWS_173`), and the zip is
+built by `archive_file` in the same apply that deploys it (`CKV_AWS_272`).
+
+**One does not.** `CKV_AWS_116` — no dead-letter queue — was written for the
+three lifecycle hooks, which ECS invokes **synchronously** and itself consumes
+the result of; there is no dropped event for a queue to catch. The collector
+is invoked **asynchronously**, by EventBridge, so a dropped invocation is a
+real possibility this module's original reasoning did not cover. The skip's
+comment is rewritten to say so explicitly, and the answer is still no DLQ —
+for a different reason than before: nothing in this project polls a queue, and
+a DLQ here would accumulate events no human or process ever reads while
+suggesting to the next reader that dropped invocations are handled somewhere.
+What actually handles them is the collector's own `Errors` alarm, publishing
+to the alert topic within a minute, plus a `retry_policy` on both EventBridge
+targets bounding delivery to three attempts over five minutes rather than
+EventBridge's own default of 185 attempts over 24 hours.
 
 ## Why it has no test suite of its own
 
 It has no logic: no conditionals beyond one `dynamic` block that omits an empty
-environment, no `for_each`, no computed names. The calling layer's assertions on
-three real instantiations
-([`prod/tests/bluegreen.tftest.hcl`](../../environments/prod/tests/bluegreen.tftest.hcl))
-test everything it does. A suite over a module with no branches asserts that
+environment, no `for_each`, no computed names. The calling layers' assertions
+on its four real instantiations — the three lifecycle hooks in
+[`prod/tests/bluegreen.tftest.hcl`](../../environments/prod/tests/bluegreen.tftest.hcl)
+and the release metrics collector in
+[`foundation/tests/observability.tftest.hcl`](../../foundation/tests/observability.tftest.hcl)
+— test everything it does. A suite over a module with no branches asserts that
 Terraform works.
 
-If Phase 9 adds branching for dependency-bearing packages, that phase adds the
-tests.
+Phase 9 added a fourth instantiation and no branching, so this remains true
+rather than needing its own test suite for the first time.

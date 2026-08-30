@@ -394,3 +394,39 @@ tags on all of the above:
 > `bgd-us-east-1-prod-api-green`, at 28 characters against the 32-character cap
 > that §4 records and that §1 chose `bgd` to fit inside. Nothing needs
 > truncating anywhere, with four characters to spare.
+
+> **Amended in Phase 9 (2026-08-30).** The observability plane, added beside
+> the production plane above rather than replacing it — it is a second,
+> independent worked example, not a correction to the first.
+>
+> ```
+> Lambda function      bgd-us-east-1-release-metrics
+> Lambda exec role      bgd-us-east-1-release-metrics-role
+> Log group             /aws/lambda/bgd-us-east-1-release-metrics
+> Event rules            bgd-us-east-1-pipeline-executions
+>                        bgd-us-east-1-prod-deployments
+> Watchdog alarm         bgd-us-east-1-release-metrics-errors
+> Dashboard              bgd-us-east-1-release
+>
+> tags on all of the above:
+>   environment = shared
+>   projectName = bgd
+>   region      = us-east-1
+>   owner       = carreque45@gmail.com
+> ```
+>
+> Every one of these carries `environment = shared`, the same tag the two
+> pipelines and their build projects carry — this plane lives in `foundation`
+> for the reason [the design research's §8
+> amendment](./2026-08-04-blue-green-deployment-platform-design-research.md#8-observability-and-release-metrics)
+> gives (a layer cycle, and the metric history outliving teardown), and
+> `foundation` is the shared layer.
+>
+> **`prod` in `bgd-us-east-1-prod-deployments` names what the rule watches,
+> not where the rule lives.** The rule itself is `shared` — it is a
+> `foundation` resource, tagged and destroyed on `foundation`'s own lifecycle
+> — and its name still carries `prod` because that is the production ECS
+> service its event pattern matches. This is §2's amendment applied a second
+> time: a resource's `environment` tag says what plane it belongs to, and a
+> name segment can say something else entirely — here, what it is scoped to
+> rather than where it runs.

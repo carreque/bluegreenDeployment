@@ -2,8 +2,12 @@
 #
 # Named iam-app-pipeline.tf beside iam-pipeline.tf for the reason Phase 7 gave
 # for the first name: these belong to the *app* pipeline rather than to the
-# layer, and Phase 9 adds a third set. The two files share nothing but the two
-# assume-role policies below them, which iam-pipeline.tf declares.
+# layer. Phase 9 does NOT add a third set of roles here, despite what an
+# earlier version of this comment predicted — it needs one policy, not a
+# role, and observability.tf attaches it to the role the Lambda module
+# already creates for the release metrics collector. There is no
+# iam-observability.tf. The two files share nothing but the two assume-role
+# policies below them, which iam-pipeline.tf declares.
 #
 # Six rather than one, and five of them service roles rather than one shared,
 # because a CodeBuild build's permissions come from `service_role` on the
