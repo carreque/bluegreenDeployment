@@ -116,8 +116,8 @@ run "the_body_is_valid_json_with_widgets" {
   command = apply
 
   assert {
-    condition     = length(jsondecode(aws_cloudwatch_dashboard.release.dashboard_body).widgets) >= 8
-    error_message = "the dashboard must carry the release, pipeline, production and staging widgets"
+    condition     = length(jsondecode(aws_cloudwatch_dashboard.release.dashboard_body).widgets) == 12
+    error_message = "the dashboard must carry exactly the twelve widgets the design specifies — the header, four release-metric tiles, the pipeline band, four production tiles and two staging/collector tiles"
   }
 
   assert {

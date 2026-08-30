@@ -220,10 +220,14 @@ variable "mttr_lookback_days" {
     How far back the collector looks for an unrecovered failure when a
     deployment succeeds (plan D7).
 
-    Thirty days. Long enough that a failure left over a holiday is still found;
-    short enough that GetMetricData stays one cheap call. A recovery older than
-    this is not reported, which is the right answer — an MTTR of five weeks
-    describes a project that was not being worked on.
+    Thirty days. Long enough that a failure left over a holiday is still found —
+    and actually found: the handler queries at a 300-second period precisely so
+    a 30-day GetMetricData window stays within CloudWatch's 63-day retention for
+    5-minute datapoints, rather than the 15-day retention 1-minute datapoints
+    get, which would have made half this window invisible. Short enough that
+    GetMetricData stays one cheap call. A recovery older than this is not
+    reported, which is the right answer — an MTTR of five weeks describes a
+    project that was not being worked on.
   EOT
   type        = number
   default     = 30

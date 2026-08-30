@@ -132,6 +132,22 @@ def test_a_rollback_is_counted_once_and_never_also_as_a_failure(clients):
     assert h.METRIC_DEPLOYMENT_FAILED not in _metric_names(clients["cloudwatch"])
 
 
+@pytest.mark.parametrize("phrase", ["rollback", "rolling back", "rolled back"])
+def test_each_rollback_reason_phrase_is_detected(clients, phrase):
+    # D8. ROLLBACK_REASON_PHRASES has three entries because ECS writes three
+    # different phrasings and no single substring covers all three. Only one
+    # of them was ever exercised by a reason string before this test: deleting
+    # either of the other two passed every other test in this file, because
+    # the `any(...)` generator line is covered regardless of which phrase in
+    # the tuple actually matched.
+    reason = f"backend unhealthy, {phrase} to revision 4"
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED", reason=reason), None)
+
+    names = _metric_names(clients["cloudwatch"])
+    assert h.METRIC_DEPLOYMENT_ROLLED_BACK in names
+    assert h.METRIC_DEPLOYMENT_FAILED not in names
+
+
 def test_a_rollback_is_detected_from_the_event_name_too(clients):
     # The reason string is free text and may not mention it; the event name may.
     # Either is enough, because missing a rollback is the failure this phase's
@@ -146,6 +162,21 @@ def test_the_metric_carries_the_environment_dimension(clients):
 
     dimensions = clients["cloudwatch"].puts[0]["MetricData"][0]["Dimensions"]
     assert dimensions == [{"Name": "Environment", "Value": "prod"}]
+
+
+def test_the_namespace_and_environment_come_from_their_own_env_vars(clients, monkeypatch):
+    # Both defaults happen to coincide with the Terraform defaults, which
+    # means an overridden var.metric_namespace would today send metrics to the
+    # wrong namespace — the IAM condition would deny the write, and nothing in
+    # this suite would catch it, because no test until this one set either var.
+    monkeypatch.setenv("BGD_METRIC_NAMESPACE", "SomeOtherNamespace")
+    monkeypatch.setenv("BGD_ENVIRONMENT", "not-prod")
+
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED"), None)
+
+    put = clients["cloudwatch"].puts[0]
+    assert put["Namespace"] == "SomeOtherNamespace"
+    assert put["MetricData"][0]["Dimensions"] == [{"Name": "Environment", "Value": "not-prod"}]
 
 
 def test_an_alert_without_a_topic_arn_logs_rather_than_raising(clients, monkeypatch, caplog):
@@ -205,7 +236,28 @@ def test_a_failed_pipeline_is_counted_per_pipeline_and_emails(clients):
     assert "bgd-us-east-1-infra-pipeline" in clients["sns"].published[0]["Subject"]
 
 
+def test_every_alert_subject_is_ascii(clients):
+    # CRITICAL: SNS documents Publish's Subject as ASCII text, and a non-ASCII
+    # subject makes the call raise InvalidParameterException outright. An em
+    # dash is idiomatic in this project's prose and easy to reintroduce here;
+    # this is what stops it. For the ECS FAILED path a raising Publish is
+    # worse than a lost email: `_put` runs first, so EventBridge's two retries
+    # would write DeploymentFailed three times for one failure, inflating
+    # change failure rate, while the only mail that arrives is the watchdog
+    # saying the collector raised.
+    h.handler(_ecs("SERVICE_DEPLOYMENT_ROLLBACK_IN_PROGRESS"), None)
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED", reason="tasks failed to start"), None)
+    h.handler(_pipeline_event("FAILED", pipeline="bgd-us-east-1-infra-pipeline"), None)
+
+    assert len(clients["sns"].published) == 3
+    for published in clients["sns"].published:
+        assert published["Subject"].isascii()
+
+
 def test_lead_time_uses_the_commit_timestamp_when_the_api_supplies_one(clients, monkeypatch):
+    # This execution carries no "variables" key at all, which is also the
+    # "APP_SCOPE is absent" case IMPORTANT 2 requires: a git-trigger-started
+    # run supplies no execution variables and must still emit lead time.
     committed = datetime(2026, 8, 30, 10, 0, 0, tzinfo=UTC)  # two hours before _now
     monkeypatch.setitem(
         h._CLIENTS,
@@ -221,6 +273,49 @@ def test_lead_time_uses_the_commit_timestamp_when_the_api_supplies_one(clients, 
     assert datum["Value"] == 7200.0
 
 
+def test_lead_time_is_emitted_when_app_scope_resolves_to_all(clients, monkeypatch):
+    committed = datetime(2026, 8, 30, 10, 0, 0, tzinfo=UTC)
+    monkeypatch.setitem(
+        h._CLIENTS,
+        "codepipeline",
+        FakeCodePipeline(
+            execution={
+                "variables": [{"name": "APP_SCOPE", "resolvedValue": "all"}],
+                "artifactRevisions": [{"created": committed}],
+            }
+        ),
+    )
+
+    h.handler(_pipeline_event("SUCCEEDED"), None)
+
+    assert clients["cloudwatch"].puts[0]["MetricData"][0]["MetricName"] == h.METRIC_LEAD_TIME
+
+
+def test_no_lead_time_is_emitted_when_app_scope_stopped_before_production(
+    clients, monkeypatch, caplog
+):
+    # IMPORTANT 2. codepipeline-app.tf's DeployStaging and Prod stages both
+    # carry a before_entry condition with result = "SKIP", so a run scoped to
+    # "build" or "staging" skips the deploy stages and still finishes
+    # SUCCEEDED. Reaching SUCCEEDED is only reaching production when the
+    # resolved APP_SCOPE is "all".
+    monkeypatch.setitem(
+        h._CLIENTS,
+        "codepipeline",
+        FakeCodePipeline(
+            execution={
+                "variables": [{"name": "APP_SCOPE", "resolvedValue": "build"}],
+                "artifactRevisions": [{"created": datetime(2026, 8, 30, 10, 0, 0, tzinfo=UTC)}],
+            }
+        ),
+    )
+
+    h.handler(_pipeline_event("SUCCEEDED"), None)
+
+    assert clients["cloudwatch"].puts == []
+    assert "APP_SCOPE=build" in caplog.text
+
+
 def test_lead_time_falls_back_to_the_execution_start_time(clients, monkeypatch, caplog):
     # F4: whether CodeConnections populates artifactRevisions[].created cannot be
     # confirmed offline. Absent it, the number is merge-to-production rather than
@@ -232,6 +327,33 @@ def test_lead_time_falls_back_to_the_execution_start_time(clients, monkeypatch, 
         FakeCodePipeline(
             execution={"artifactRevisions": [{"revisionId": "abc123"}]},
             summaries=[{"pipelineExecutionId": "exec-1", "startTime": started}],
+        ),
+    )
+
+    h.handler(_pipeline_event("SUCCEEDED"), None)
+
+    assert clients["cloudwatch"].puts[0]["MetricData"][0]["Value"] == 1800.0
+    assert "lead_time_basis=merge" in caplog.text
+
+
+def test_lead_time_falls_back_scanning_past_a_non_matching_summary(clients, monkeypatch, caplog):
+    # F4's likely real path in production: ListPipelineExecutions returns many
+    # executions and this one's id is not the first. No prior test exercised
+    # the loop's non-matching iteration in _release_started_at — a summary
+    # whose id does not equal execution_id must be skipped, not returned.
+    started = datetime(2026, 8, 30, 11, 30, 0, tzinfo=UTC)
+    monkeypatch.setitem(
+        h._CLIENTS,
+        "codepipeline",
+        FakeCodePipeline(
+            execution={"artifactRevisions": [{"revisionId": "abc123"}]},
+            summaries=[
+                {
+                    "pipelineExecutionId": "some-other-exec",
+                    "startTime": datetime(2026, 8, 29, 0, 0, 0, tzinfo=UTC),
+                },
+                {"pipelineExecutionId": "exec-1", "startTime": started},
+            ],
         ),
     )
 

@@ -111,9 +111,13 @@ locals {
         metrics = [
           [var.metric_namespace, "DeploymentFailed", "Environment", "prod", { id = "failed", visible = false }],
           [var.metric_namespace, "DeploymentSucceeded", "Environment", "prod", { id = "succeeded", visible = false }],
-          # FILL(..., 0) is load-bearing: without it, a period where one series
-          # has no datapoint makes the whole expression empty rather than zero,
-          # and the tile reads blank on exactly the quiet weeks it should read 0.
+          # FILL(..., 0) is load-bearing, within what it actually does: it
+          # interpolates a missing datapoint inside a period where the OTHER
+          # series in the expression still has data, turning that gap into 0
+          # rather than leaving the whole expression undefined for that period.
+          # It does not synthesize a series where the metric published nothing
+          # at all — a week with no deployments of either kind still renders
+          # this tile empty, correctly, because there is no ratio to show.
           [{ expression = "100 * FILL(failed, 0) / (FILL(failed, 0) + FILL(succeeded, 0))", label = "Change failure rate %", id = "cfr" }],
         ]
       }

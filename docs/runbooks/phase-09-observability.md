@@ -230,8 +230,11 @@ uses `EQ "all"`, and both key on exactly the same three-value vocabulary
 stage condition works as documented, an unrecognised value never reaches the
 script at all — the stage **skips**, cleanly, before `pipeline-deploy.sh`'s
 `die "APP_SCOPE is '$scope'; expected one of build, staging, all"` on line
-160 ever runs. Whether that is really what happens in this account is
-Phase 7's still-open F2, unconfirmed offline. This step settles it.
+160 ever runs. Phase 8's runbook §7 already exercised `MATCHES` with a real
+in-vocabulary value and closed Phase 7's F2 for both pipelines — a precondition
+of this runbook — so what is genuinely still open here is narrower: whether
+the same `VariableCheck` mechanism skips cleanly on a value **outside** the
+three-value vocabulary altogether, which nothing before this step has tried.
 
 ```bash
 aws codepipeline start-pipeline-execution \
@@ -345,6 +348,15 @@ project's memory of this phase:
    the dashboard's header widget already states both possibilities — this is
    the read that turns one of them into fact.
 
+**Also confirm no `Publish` error appears in this log.** SNS rejects a
+non-ASCII or over-length `Subject` outright, and `_alert` is the one call in
+this handler with no fallback of its own — a rejected `Publish` raises,
+which for the FAILED path happens after the metric is already written, so a
+retried invocation would inflate the metric it just wrote while the email
+that should have explained why never arrives. A clean sweep of this log for
+`Publish` errors is what catches that class of failure even if a future edit
+to a subject line reintroduces it.
+
 ---
 
 ## 9. Confirm the metrics exist
@@ -400,6 +412,15 @@ telling them apart is the entire point of this step:
   same load balancer does not, the search string is wrong — check
   `local.alb_search` in `infra/foundation/dashboard.tf` against the real ALB
   name from `aws elbv2 describe-load-balancers`.
+
+**Confirm "Production tables" specifically.** `AWS/DynamoDB`'s
+`ThrottledRequests` is primarily `Operation`-dimensioned, not table-level —
+unlike `ConsumedReadCapacityUnits`/`ConsumedWriteCapacityUnits` beside it on
+the same tile, which this dashboard has not confirmed actually populate with
+just `TableName`. If that series stays empty while the consumed-capacity
+series show real data, check whether `ReadThrottleEvents`/`WriteThrottleEvents`
+— the table-level throttle metrics an operator would normally chart — are the
+better fit, before assuming the tile is merely quiet.
 
 ---
 

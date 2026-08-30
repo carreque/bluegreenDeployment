@@ -62,7 +62,13 @@ resource "aws_iam_role_policy" "release_metrics" {
     Version = "2012-10-17"
     Statement = [
       {
-        # checkov:skip=CKV_AWS_355:PutMetricData takes no resource ARN — CloudWatch metrics are not resources — so "*" is the only Resource this action accepts. The Condition below is the actual control and it is tighter than a resource scope would be: this role can write the ReleaseMetrics namespace and no other, so a compromised collector cannot overwrite the AWS/ApplicationELB series the bake alarms read.
+        # PutMetricData takes no resource ARN — CloudWatch metrics are not resources — so "*" is the only Resource this action accepts. The Condition below is the actual control and it is tighter than a resource scope would be: this role can write the ReleaseMetrics namespace and no other, so a compromised collector cannot overwrite the AWS/ApplicationELB series the bake alarms read.
+        #
+        # No checkov:skip here, deliberately: this statement and the one below share
+        # one aws_iam_role_policy resource, and CKV_AWS_355 evaluates per resource, not
+        # per statement — a skip on either statement suppresses the check for both, and
+        # removing both directives moved only one check from skipped to passed
+        # (488/110 -> 489/109). The check passes unsuppressed; do not re-add a skip here.
         Sid       = "PublishReleaseMetricsOnly"
         Effect    = "Allow"
         Action    = ["cloudwatch:PutMetricData"]
@@ -70,7 +76,7 @@ resource "aws_iam_role_policy" "release_metrics" {
         Condition = { StringEquals = { "cloudwatch:namespace" = var.metric_namespace } }
       },
       {
-        # checkov:skip=CKV_AWS_355:GetMetricData takes no resource ARN either, and unlike PutMetricData it supports no namespace condition key — the read is account-wide or it does not happen. What it buys is MTTR with no state store (plan D7): the metric store is the state store, so there is no DynamoDB table, no S3 marker and no second thing to keep in step. The exposure is read access to metric values in an account that holds one project.
+        # GetMetricData takes no resource ARN either, and unlike PutMetricData it supports no namespace condition key — the read is account-wide or it does not happen. What it buys is MTTR with no state store (plan D7): the metric store is the state store, so there is no DynamoDB table, no S3 marker and no second thing to keep in step. The exposure is read access to metric values in an account that holds one project.
         Sid      = "ReadBackTheFailureAndSuccessSeries"
         Effect   = "Allow"
         Action   = ["cloudwatch:GetMetricData"]
@@ -87,6 +93,17 @@ resource "aws_iam_role_policy" "release_metrics" {
         # nothing here needs to start, retry, stop or approve an execution, and
         # a collector that could would be a strange thing to have subscribed to
         # pipeline events.
+        #
+        # Both pipeline ARNs are granted even though the handler today only ever
+        # calls GetPipelineExecution/ListPipelineExecutions for the app pipeline
+        # (lead time is commit-to-PRODUCTION, plan D6, and the infra pipeline
+        # deploys layers, not the application). This is deliberate, not an
+        # oversight: the pipeline_executions rule already delivers infra-pipeline
+        # execution events to this collector, so a future change that computes
+        # something from an infra execution is a one-line handler change rather
+        # than also a Terraform change — and a runtime AccessDenied on a read-only
+        # grant scoped to two named ARNs would be a confusing debugging session
+        # for very little isolation gained.
         Sid    = "ReadTheTwoPipelinesExecutions"
         Effect = "Allow"
         Action = ["codepipeline:GetPipelineExecution", "codepipeline:ListPipelineExecutions"]
@@ -220,6 +237,10 @@ resource "aws_cloudwatch_metric_alarm" "release_metrics_errors" {
   period              = 60
   evaluation_periods  = 1
 
+  # Load-bearing, not cosmetic: the collector runs a handful of times a week,
+  # so the Errors metric is absent almost always, and the default treatment
+  # would park this alarm in INSUFFICIENT_DATA permanently — one that never
+  # fires and never says why.
   treat_missing_data = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alerts.arn]

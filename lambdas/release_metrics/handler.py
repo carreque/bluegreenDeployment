@@ -44,7 +44,7 @@ METRIC_PIPELINE_FAILED = "PipelineFailed"
 # The starting vocabulary, not a confirmed one. Which names ECS emits for a
 # BLUE_GREEN deployment is a runtime contract with no offline source of truth
 # (plan F3), which is exactly why the EventBridge rule does not filter on it and
-# why an unrecognised name is logged rather than raised. The runbook's step 7
+# why an unrecognised name is logged rather than raised. The runbook's step 8
 # reads the real set out of CloudWatch after the first deployment; if these are
 # wrong the fix is one line here, with these tests already around it.
 SUCCEEDED_EVENTS = frozenset({"SERVICE_DEPLOYMENT_COMPLETED"})
@@ -118,9 +118,12 @@ def _alert(subject: str, message: str) -> None:
         LOGGER.error("BGD_ALERT_TOPIC_ARN is not set; this alert is lost: %s", subject)
         return
 
-    # Subject is capped at 100 characters by SNS and a longer one is rejected
-    # outright, which would turn a deployment failure into a collector failure.
-    _client("sns").publish(TopicArn=topic_arn, Subject=subject[:100], Message=message)
+    # SNS documents Subject as ASCII text, less than 100 characters — strictly
+    # less than, so the cap here is 99, not 100. A subject over the limit, or
+    # one carrying a non-ASCII character (an em dash is idiomatic in this
+    # project's prose and easy to reintroduce here), is rejected outright by
+    # Publish, which would turn a deployment failure into a collector failure.
+    _client("sns").publish(TopicArn=topic_arn, Subject=subject[:99], Message=message)
     LOGGER.info("alert published subject=%s", subject)
 
 
@@ -159,7 +162,7 @@ def _handle_ecs(event: dict) -> dict[str, object]:
     if "ROLLBACK" in event_name or any(p in lowered_reason for p in ROLLBACK_REASON_PHRASES):
         _put(METRIC_DEPLOYMENT_ROLLED_BACK, 1, "Count", dimensions)
         _alert(
-            f"[bgd] Production deployment ROLLED BACK — {service}",
+            f"[bgd] Production deployment ROLLED BACK - {service}",
             f"ECS rolled production back.\n\nevent: {event_name}\nreason: {reason}\n"
             f"deployment: {detail.get('deploymentId', 'unknown')}\n\n"
             f"{_deployment_console_url(event)}\n",
@@ -169,7 +172,7 @@ def _handle_ecs(event: dict) -> dict[str, object]:
     if event_name in FAILED_EVENTS:
         _put(METRIC_DEPLOYMENT_FAILED, 1, "Count", dimensions)
         _alert(
-            f"[bgd] Production deployment FAILED — {service}",
+            f"[bgd] Production deployment FAILED - {service}",
             f"A production deployment failed.\n\nevent: {event_name}\nreason: {reason}\n"
             f"deployment: {detail.get('deploymentId', 'unknown')}\n\n"
             f"{_deployment_console_url(event)}\n",
@@ -210,9 +213,14 @@ def _emit_recovery_time(now: datetime, dimensions: dict[str, str]) -> None:
                     "MetricName": metric_name,
                     "Dimensions": metric_dimensions,
                 },
-                # 60s to match the resolution these are written at; anything
-                # coarser rounds a recovery to the nearest bucket.
-                "Period": 60,
+                # 300s, not 60s. CloudWatch only retains 1-minute datapoints
+                # for 15 days but keeps 5-minute datapoints for 63 — and the
+                # window below is 30 days by default, so a 60s period would
+                # make a failure older than about two weeks invisible to this
+                # query, silently. At the multi-day scale a recovery is
+                # actually measured on, rounding to the nearest 5 minutes is
+                # immaterial; losing half the lookback window is not.
+                "Period": 300,
                 "Stat": "Sum",
             },
         }
@@ -254,7 +262,28 @@ def _pipeline_console_url(event: dict, pipeline: str, execution_id: str) -> str:
     )
 
 
-def _release_started_at(pipeline: str, execution_id: str) -> tuple[datetime | None, str]:
+def _resolved_app_scope(execution: dict) -> str:
+    """The APP_SCOPE this execution actually ran with, from the same
+    GetPipelineExecution response the caller already fetched.
+
+    Absent from `variables` when the run was started by the git trigger, which
+    supplies no execution variables and takes the pipeline's own default —
+    the same fact Phase 7 §F4 recorded for DEPLOY_SCOPE, and
+    `var.app_scope_default` names it `all`. Absent therefore means "all", NOT
+    "skip": the trigger-started run IS a full production deployment, and it is
+    the main case this metric exists for. Treating a missing variable as
+    "skip" would make every merge-triggered production deployment emit no
+    lead time at all.
+    """
+    for variable in execution.get("variables") or []:
+        if variable.get("name") == "APP_SCOPE":
+            return variable.get("resolvedValue") or "all"
+    return "all"
+
+
+def _release_started_at(
+    client, pipeline: str, execution_id: str, execution: dict
+) -> tuple[datetime | None, str]:
     """When the change that just reached production was made.
 
     Preferred: the source revision's commit timestamp, which makes the metric
@@ -265,12 +294,6 @@ def _release_started_at(pipeline: str, execution_id: str) -> tuple[datetime | No
     series that silently stops when an API field is absent is worse than one
     whose basis is written beside it.
     """
-    client = _client("codepipeline")
-
-    execution = client.get_pipeline_execution(
-        pipelineName=pipeline, pipelineExecutionId=execution_id
-    ).get("pipelineExecution", {})
-
     for revision in execution.get("artifactRevisions") or []:
         created = revision.get("created")
         if created is not None:
@@ -285,7 +308,26 @@ def _release_started_at(pipeline: str, execution_id: str) -> tuple[datetime | No
 
 
 def _emit_lead_time(pipeline: str, execution_id: str, now: datetime) -> None:
-    started_at, basis = _release_started_at(pipeline, execution_id)
+    client = _client("codepipeline")
+    execution = client.get_pipeline_execution(
+        pipelineName=pipeline, pipelineExecutionId=execution_id
+    ).get("pipelineExecution", {})
+
+    # Lead time is commit-to-PRODUCTION (plan D6), and reaching SUCCEEDED is
+    # only that moment when the run actually deployed. APP_SCOPE=build and
+    # APP_SCOPE=staging both stop the pipeline before the Prod stage — its
+    # before_entry condition evaluates to SKIP, not the stage failing — so
+    # those runs also finish SUCCEEDED without ever touching production.
+    scope = _resolved_app_scope(execution)
+    if scope != "all":
+        LOGGER.info(
+            "APP_SCOPE=%s execution=%s; this run never reached production, no lead time emitted",
+            scope,
+            execution_id,
+        )
+        return
+
+    started_at, basis = _release_started_at(client, pipeline, execution_id, execution)
 
     if started_at is None:
         LOGGER.warning(
@@ -307,7 +349,7 @@ def _handle_codepipeline(event: dict) -> dict[str, object]:
     if state == "FAILED":
         _put(METRIC_PIPELINE_FAILED, 1, "Count", {"PipelineName": pipeline})
         _alert(
-            f"[bgd] Pipeline FAILED — {pipeline}",
+            f"[bgd] Pipeline FAILED - {pipeline}",
             f"A pipeline execution failed.\n\nexecution: {execution_id}\n\n"
             f"{_pipeline_console_url(event, pipeline, execution_id)}\n",
         )

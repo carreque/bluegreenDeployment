@@ -34,7 +34,6 @@ mock_provider "aws" {
   mock_resource "aws_sns_topic" {
     defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
   }
-
 }
 
 # command = apply plans and applies the WHOLE root module, not just the
@@ -136,17 +135,18 @@ run "the_collector_is_packaged_and_runs_on_the_pinned_runtime" {
     error_message = "arm64, matching the hooks and the container"
   }
 
-  # The four the handler reads. A missing one is not an apply failure — it is a
+  # The five the handler reads. A missing one is not an apply failure — it is a
   # collector that writes to the default namespace, or one that cannot find the
   # topic and logs the alert away. Plan §D9's own error path.
   assert {
     condition = alltrue([
       module.release_metrics.environment_variables["BGD_METRIC_NAMESPACE"] == "ReleaseMetrics",
       module.release_metrics.environment_variables["BGD_ENVIRONMENT"] == "prod",
+      module.release_metrics.environment_variables["BGD_MTTR_LOOKBACK_DAYS"] == tostring(var.mttr_lookback_days),
       module.release_metrics.environment_variables["BGD_APP_PIPELINE"] == aws_codepipeline.app.name,
       module.release_metrics.environment_variables["BGD_ALERT_TOPIC_ARN"] != "",
     ])
-    error_message = "the collector's environment must name the namespace, the environment, the app pipeline and the topic"
+    error_message = "the collector's environment must name the namespace, the environment, the MTTR lookback, the app pipeline and the topic"
   }
 }
 

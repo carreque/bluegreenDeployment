@@ -91,12 +91,15 @@ EventBridge can target SNS directly, and a rule with an `input_transformer` woul
 Routed through the collector instead, that decision is ordinary Python with a pytest suite around it, and the email can say
 
 ```
-[bgd] Production deployment FAILED — bgd-us-east-1-prod-api
+[bgd] Production deployment FAILED - bgd-us-east-1-prod-api
 reason: tasks failed to start
 https://us-east-1.console.aws.amazon.com/ecs/v2/clusters/…/deployments
 ```
 
-rather than a JSON blob the recipient has to parse at 2am.
+rather than a JSON blob the recipient has to parse at 2am. The subject uses a
+plain hyphen, not an em dash: SNS documents `Publish`'s `Subject` as ASCII
+text, and a non-ASCII subject is rejected outright, which would silently break
+every alert this phase exists to send.
 
 The obvious objection is that a broken collector means no alerts, silently. That is answered by D13, not by keeping EventBridge→SNS as a parallel path: two paths to the same inbox produce two emails per failure, and a duplicate alert trains the recipient to ignore the topic faster than a missing one does.
 
@@ -109,7 +112,7 @@ The reason is F3: which event names ECS emits for a *blue/green* deployment — 
 - Filter on a guessed list and guess wrong: the rollback the whole project exists to demonstrate produces **no metric and no email**, and nothing anywhere reports a problem. The rule looks correct in the console.
 - Filter on nothing and let the handler ignore what it does not recognise: an unrecognised event costs one Lambda invocation and one `INFO` log line naming the event it saw.
 
-The second is also how the vocabulary gets discovered. The runbook's step 7 reads the collector's log group after the first real deployment and records the actual event names; if the guessed set in `handler.py` turns out wrong, the fix is a one-line edit to a `frozenset` with a test already around it. Same move Phase 6 made with the hook return contract, for the same reason.
+The second is also how the vocabulary gets discovered. The runbook's step 8 reads the collector's log group after the first real deployment and records the actual event names; if the guessed set in `handler.py` turns out wrong, the fix is a one-line edit to a `frozenset` with a test already around it. Same move Phase 6 made with the hook return contract, for the same reason.
 
 #### D5 — Seven metric streams, and the ratios are computed on the dashboard
 
@@ -126,13 +129,13 @@ Six metric *names*, seven metric *streams*, because `PipelineFailed` carries a d
 
 **Change failure rate is not among them, deliberately.** It is `100 * failed / (failed + succeeded)`, and a ratio stored as a metric can only ever be computed over whatever window the writer chose — which is never the window the reader is looking at. As dashboard metric math it recomputes for whatever range you drag to. Deployment frequency is the same argument: it is `SUM(DeploymentSucceeded)` over the period the viewer picked, not a rate anyone has to store.
 
-#### D6 — Lead time comes from the application pipeline's own execution, commit-basis with a stated fallback
+#### D6 — Lead time comes from the application pipeline's own execution, commit-basis with a stated fallback, gated on APP_SCOPE=all
 
-The app pipeline's last action is the production `terraform apply`, and Phase 6 set `wait_for_steady_state = true`, so **that pipeline reaching `SUCCEEDED` is exactly the moment the change is live in production.** Nothing else in the system knows that as precisely.
+**Corrected premise.** The original claim here was that the app pipeline reaching `SUCCEEDED` is exactly the moment the change is live in production. That is false as of Phase 8: `codepipeline-app.tf`'s `DeployStaging` and `Prod` stages both carry a `before_entry` condition with `result = "SKIP"`, so a run with `APP_SCOPE=build` or `APP_SCOPE=staging` skips the deploy stages entirely and still finishes `SUCCEEDED`. The pipeline's last action is the production `terraform apply` only when the run actually reached the `Prod` stage — which is exactly what `APP_SCOPE=all` means. The correct premise is: **that pipeline reaching `SUCCEEDED` with a resolved `APP_SCOPE` of `all` is the moment the change is live in production**, and Phase 6's `wait_for_steady_state = true` is what makes that moment precise. The handler reads the resolved `APP_SCOPE` back from the same `GetPipelineExecution` call it already makes (`pipelineExecution.variables`), using the permission it already has, and emits lead time only when that value is `all`; a run started by the git trigger supplies no execution variables at all, and an absent value is treated as `all` — the pipeline's own default (`var.app_scope_default`) — because a merge-triggered run IS a full deployment and is the main case this metric exists for.
 
 `codepipeline:GetPipelineExecution` returns `artifactRevisions[].created`, which for a source revision is the commit timestamp — genuine commit-to-production lead time. Whether that field is populated for a CodeConnections/GitHub source cannot be confirmed offline (F4), so the handler falls back to the execution's own `startTime` from `ListPipelineExecutions`, which is merge-to-production.
 
-The two are not the same number and the handler never pretends otherwise: it logs `lead_time_basis=commit` or `lead_time_basis=merge` on every emission. The metric is emitted either way, because a lead-time series that silently stops when an API field is absent is worse than one whose basis is written in the log beside it. The runbook's step 7 records which basis is real, and the dashboard's text widget states it.
+The two are not the same number and the handler never pretends otherwise: it logs `lead_time_basis=commit` or `lead_time_basis=merge` on every emission. The metric is emitted either way, because a lead-time series that silently stops when an API field is absent is worse than one whose basis is written in the log beside it. The runbook's step 8 records which basis is real, and the dashboard's text widget states it.
 
 The alternative — correlating an ECS deployment back to its image tag, then to `app-builds/<tag>/build-metadata.json` in the artifact bucket — was rejected: three API calls and an S3 read to recover a timestamp the pipeline already knows, and it would break the moment someone deploys by `make apply-prod`.
 
@@ -152,7 +155,7 @@ A rollback is a change failure, so the tempting rule is "emit both". It is refus
 
 So each event produces at most one outcome metric, checked in this order: rollback, then failed, then succeeded. If ECS turns out to emit *only* a rollback event, change failure rate under-counts by exactly the rollbacks — and that gap is visible, because `DeploymentRolledBack` is its own widget sitting beside it on the same dashboard. An under-count you can see beats an over-count you cannot.
 
-The runbook's step 7 records which events actually arrive, and the fix if it is the second case is one line in `_handle_ecs`.
+The runbook's step 8 records which events actually arrive, and the fix if it is the second case is one line in `_handle_ecs`.
 
 #### D9 — The handler raises only on internal failure, never on an unrecognised event
 
@@ -260,7 +263,7 @@ The caveat AWS attaches — the bundled version can change without notice — is
 
 ### F3 — The ECS blue/green event vocabulary is not in the provider schema
 
-`aws_cloudwatch_event_rule` takes `event_pattern` as an opaque JSON string. Which `detail.eventName` values ECS emits for a `BLUE_GREEN` deployment, and specifically what an alarm-triggered rollback during the bake produces, is a runtime contract with no offline source of truth. The known-good rolling-deployment names — `SERVICE_DEPLOYMENT_IN_PROGRESS`, `SERVICE_DEPLOYMENT_COMPLETED`, `SERVICE_DEPLOYMENT_FAILED` — are the starting set. Drives D4, D8 and the runbook's step 7.
+`aws_cloudwatch_event_rule` takes `event_pattern` as an opaque JSON string. Which `detail.eventName` values ECS emits for a `BLUE_GREEN` deployment, and specifically what an alarm-triggered rollback during the bake produces, is a runtime contract with no offline source of truth. The known-good rolling-deployment names — `SERVICE_DEPLOYMENT_IN_PROGRESS`, `SERVICE_DEPLOYMENT_COMPLETED`, `SERVICE_DEPLOYMENT_FAILED` — are the starting set. Drives D4, D8 and the runbook's step 8.
 
 ### F4 — `artifactRevisions[].created` may not be populated for a CodeConnections source
 
@@ -574,7 +577,7 @@ METRIC_PIPELINE_FAILED = "PipelineFailed"
 # The starting vocabulary, not a confirmed one. Which names ECS emits for a
 # BLUE_GREEN deployment is a runtime contract with no offline source of truth
 # (plan F3), which is exactly why the EventBridge rule does not filter on it and
-# why an unrecognised name is logged rather than raised. The runbook's step 7
+# why an unrecognised name is logged rather than raised. The runbook's step 8
 # reads the real set out of CloudWatch after the first deployment; if these are
 # wrong the fix is one line here, with these tests already around it.
 SUCCEEDED_EVENTS = frozenset({"SERVICE_DEPLOYMENT_COMPLETED"})
@@ -2218,8 +2221,6 @@ locals {
     staging_5xx = "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HTTPCode_Target_5XX_Count\" ${local.observability.staging_alb_name}', 'Sum', 60)"
     staging_latency = "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"TargetResponseTime\" ${local.observability.staging_alb_name}', 'p95', 60)"
   }
-
-  release_dimensions = ["Environment", "prod"]
 }
 ```
 
@@ -2459,8 +2460,8 @@ From the roadmap:
 
 | # | Criterion | Met by | Verified in |
 |---|---|---|---|
-| 1 | A real deployment produces metrics on the dashboard | a production deployment through the Phase 8 pipeline | runbook steps 6, 8 and 9 |
-| 2 | A deliberately failed deployment produces an email | the scope-gate failure of step 5, and the alarm breach of step 10 | runbook steps 5 and 10 |
+| 1 | A real deployment produces metrics on the dashboard | a production deployment through the Phase 8 pipeline | runbook steps 7, 9 and 10 |
+| 2 | A deliberately failed deployment produces an email | the approval rejection of step 5, and the alarm breach of step 11 | runbook steps 5 and 11 |
 
 **Neither is met by the branch alone.** Both need a pipeline execution and a running production service, and this session creates no AWS resource (D1).
 
@@ -2477,11 +2478,11 @@ The branch's own gate, which **is** met by the branch:
 
 | Risk | Handling |
 |---|---|
-| The ECS blue/green event vocabulary differs from the guessed set (F3) | The rule does not filter on it, so every event reaches the handler and is logged. Runbook step 7 records the real names; the fix is one `frozenset`. |
-| A rollback emits both a rollback event and a FAILED event, so change failure rate under-counts (D8) | Chosen over the double-count. `DeploymentRolledBack` is its own widget beside the rate, so the gap is visible rather than hidden. Runbook step 7 confirms which case is real. |
+| The ECS blue/green event vocabulary differs from the guessed set (F3) | The rule does not filter on it, so every event reaches the handler and is logged. Runbook step 8 records the real names; the fix is one `frozenset`. |
+| A rollback emits both a rollback event and a FAILED event, so change failure rate under-counts (D8) | Chosen over the double-count. `DeploymentRolledBack` is its own widget beside the rate, so the gap is visible rather than hidden. Runbook step 8 confirms which case is real. |
 | `artifactRevisions[].created` is not populated, so lead time silently means merge-to-production (F4) | The handler logs `lead_time_basis` on every emission and the dashboard's header widget states which basis is in use. Never silent. |
-| A `SEARCH()` expression matches nothing and a widget is permanently empty (F8) | Runbook step 9 opens the dashboard and checks each widget, using a sibling widget on the same load balancer as the control. |
-| The bake alarms now email on any breach, not only during a deployment (D12) | Accepted — a production 5xx storm outside a deployment is worth an email. The thresholds are recorded as *chosen, not measured* and runbook step 11 records the real ones. |
+| A `SEARCH()` expression matches nothing and a widget is permanently empty (F8) | Runbook step 10 opens the dashboard and checks each widget, using a sibling widget on the same load balancer as the control. |
+| The bake alarms now email on any breach, not only during a deployment (D12) | Accepted — a production 5xx storm outside a deployment is worth an email. The thresholds are recorded as *chosen, not measured* and runbook step 12 records the real ones. |
 | Phase 11's demonstrations will send real email | Intended. A demonstration rollback that mails you is the demonstration working; Phase 6's reason for deferring the actions was the eight phases in which the topic carried nothing. |
 | The collector is a single point of failure for alerting (D3) | The watchdog alarm (D13) does not travel through it. A second EventBridge→SNS path was rejected: two paths mean two emails per failure, and duplicates train the recipient to filter the topic faster than a gap does. |
 | boto3's bundled version changes under the collector (F2) | Four API calls whose signatures are a decade old. Recorded in the module README; the escalation, if it ever happens, is a Lambda layer. |

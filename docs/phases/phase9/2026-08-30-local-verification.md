@@ -293,9 +293,10 @@ that *does* fire on a wildcard `Resource` there, a reader seeing an existing
 skip would wrongly assume it was already considered. This was explicitly
 **not** treated as a fix round, because nothing behaves wrongly — it is a
 Minor finding recorded here rather than acted on with a behaviour change, and
-`observability.tf` in the committed tree still reads `checkov:skip=CKV_AWS_355`
-on both statements as of this record. Cost if this ruling is wrong: two
-comment lines read slightly differently than they should.
+`observability.tf` in the committed tree still read `checkov:skip=CKV_AWS_355`
+on both statements as of this original record. Cost if this ruling is wrong:
+two comment lines read slightly differently than they should. **Acted on in
+§8's pre-merge fix wave** — both directives are now ordinary comments.
 
 ### 3.5 A known limitation, not a defect
 
@@ -440,8 +441,7 @@ verifying this phase, and each is described in full in §3 above:
   missed by the preflight conflict scan that checked ordering but not
   substring matching.
 - The two inert `checkov:skip=CKV_AWS_355` comments (§3.4), ruled to become
-  ordinary comments in a later cleanup — not yet done, since nothing offline
-  requires it.
+  ordinary comments in a later cleanup — done in §8's pre-merge fix wave.
 - The inverted bake-alarm assertion's known limitation (§3.5) — it cannot
   distinguish an evaluated expression from a hand-typed literal, which is a
   property of Terraform's test framework rather than of this phase's tests.
@@ -484,3 +484,61 @@ explicitly deferred there to Phase 11's alarm-triggered rollback demonstration,
 since nothing in this runbook's deployment produces a rollback to observe;
 and whether the four bake alarms' thresholds, recorded throughout as *chosen,
 not measured*, are the right numbers under real traffic (runbook steps 11–12).
+
+---
+
+## 8. The pre-merge fix wave
+
+A final whole-branch review before offering this branch for merge found
+several defects, two of them in this plan and this record rather than only in
+code. Fixed in the same commit as this section: CRITICAL 1 (every SNS alert
+subject used an em dash — non-ASCII, which SNS's `Publish` rejects outright,
+so all three alerting paths this phase exists to build would have failed on
+first use; fixed to a plain hyphen, `Subject` truncated at 99 characters, not
+100, matching the documented *less than* 100, and one test per alert path now
+asserts `Subject.isascii()`); IMPORTANT 2 (lead time was emitted for any
+`SUCCEEDED` app-pipeline execution, but `APP_SCOPE=build`/`staging` skip the
+deploy stages and still finish `SUCCEEDED` — the handler now reads the
+resolved `APP_SCOPE` back from the same `GetPipelineExecution` call it already
+made and gates emission on `all`, treating an absent value — the git-trigger
+case — as `all` rather than as skip); IMPORTANT 3 (the MTTR lookback queried
+at a 60-second period over a 30-day window, but CloudWatch only keeps 1-minute
+datapoints for 15 days, so a failure older than about two weeks was invisible
+to the query that is supposed to find it — fixed to a 300-second period, which
+CloudWatch keeps for 63 days); IMPORTANT 4 (only one of
+`ROLLBACK_REASON_PHRASES`'s three entries was ever exercised by a reason
+string — deleting either of the other two passed all 37 tests — now
+parametrized over all three); §3.4's ruling on the two
+`checkov:skip=CKV_AWS_355` comments is now acted on rather than deferred: they
+are ordinary comments in the committed tree as of this wave, both reasoning
+texts preserved verbatim, with a note that the check passes unsuppressed; and
+the stale runbook step numbers left over from the step-5 replan (§3.7) are
+corrected throughout the plan and the handler's module comment.
+
+Two things this review found were recorded rather than fixed, on the
+reviewer's own instruction that a blind fix at the end of a branch is worse
+than a recorded question:
+
+- **An interaction nobody decided on purpose.** Plan D8 makes a rollback emit
+  `DeploymentRolledBack` *instead of* `DeploymentFailed`. MTTR's `_emit_recovery_time`
+  (plan D7) looks for the most recent `DeploymentFailed` with no later
+  `DeploymentSucceeded`. Put those two together and a platform whose headline
+  demonstration is a rollback may never write a single `RecoveryTimeSeconds`
+  datapoint for it — a rollback recovers nothing in MTTR's own vocabulary,
+  because it was never counted as the kind of failure MTTR looks for. That is
+  a defensible reading of D7 and D8 individually; nobody took it as a decision
+  about their combination. Left as an open question for Phase 11 to settle
+  with the real rollback data that phase's demonstration will produce — not
+  guessed at here.
+- **A dashboard metric worth confirming, not assuming.** "Production tables"
+  charts `AWS/DynamoDB` `ThrottledRequests` beside the two consumed-capacity
+  series. `ThrottledRequests` is documented as primarily `Operation`-dimensioned;
+  `ReadThrottleEvents`/`WriteThrottleEvents` are the table-level metrics an
+  operator would normally reach for. Not changed blind — runbook step 10 now
+  tells the operator to confirm this specific widget against real traffic
+  rather than assuming a quiet tile means zero throttling.
+
+Runbook step 8 also gained one line: while reading the collector's log for
+event names and `lead_time_basis`, also confirm no `Publish` error appears —
+turning CRITICAL 1's class of failure into one the runbook would catch even if
+a future edit reintroduces a non-ASCII subject.

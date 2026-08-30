@@ -127,7 +127,7 @@ output "release_metrics_log_group_name" {
 }
 
 output "dashboard_name" {
-  description = "The single dashboard covering pipeline and application health in both environments."
+  description = "The bare name `dashboard_url` is built from and `aws cloudwatch get-dashboard --dashboard-name` needs directly; a rename here silently breaks the URL output's fragment and any script that pins the string rather than reading this output."
   value       = aws_cloudwatch_dashboard.release.dashboard_name
 }
 
