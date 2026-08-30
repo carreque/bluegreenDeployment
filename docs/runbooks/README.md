@@ -14,6 +14,7 @@ Planned, in the order they are needed:
 | [Production apply and the blue/green demonstration](./phase-06-prod-blue-green.md) | 6 |
 | [The infra pipeline apply, both exit criteria, and repairing a broken pipeline definition by local apply](./phase-07-infra-pipeline.md) | 7 |
 | [The app pipeline apply, the exit criterion, and both narrow-scope runs](./phase-08-app-pipeline.md) | 8 |
+| [The observability plane apply, a deliberate pipeline failure, and the dashboard's first real data](./phase-09-observability.md) | 9 |
 | Teardown and rebuild — what survives, what does not, how long it takes | 10 |
 | The three rollback demonstrations | 11 |
 
@@ -31,6 +32,15 @@ the repair caveat above, and **both survive a teardown**: after `make teardown`
 they are still armed, and a merge to `main` will fire one against an account
 that no longer has a network. The Phase 8 runbook's last section says what to do
 about that.
+
+Phase 9 adds the observability plane — one collector Lambda, two EventBridge
+rules, a dashboard, and `alarm_actions` on Phase 6's four bake alarms — in the
+same `infra/foundation` layer, so it also survives a teardown. From this phase
+on, a wrong bake-alarm threshold is not only a mis-gated deployment; it is an
+email at 3am, because those alarms now notify. The Phase 9 runbook's steps 8,
+10 and 12 exist specifically to settle what could not be checked with no AWS
+session: the real ECS event vocabulary, whether a dashboard widget's `SEARCH`
+actually matches anything, and the real alarm thresholds under real traffic.
 
 The project has exactly **three** irreducibly manual steps, all in Phase 3:
 authorising the CodeConnections link, confirming the SNS email subscription, and
