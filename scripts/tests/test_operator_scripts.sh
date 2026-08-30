@@ -63,4 +63,29 @@ check "…and writes no marker" "" "$(grep -o put-parameter "$FAKE_AWS_LOG" || t
 rm -f "$FAKE_AWS_LOG"
 unset FAKE_AWS_LOG
 
+# --- verify-idle -------------------------------------------------------------
+
+IDLE="$ROOT/scripts/verify-idle.sh"
+
+run_capture env SCOPE=sideways "$IDLE"
+check          "an unrecognised SCOPE is fatal"  "1" "$STATUS"
+check_contains "…listing the three it accepts"   "expected one of prod, staging, network" "$OUTPUT"
+
+# The script must never read a state file: state is exactly what is wrong in
+# the three cases it exists for — a resource created by hand, a drifted state,
+# and a destroy that failed part-way. Plan §D9.
+check "verify-idle opens no state file" "" \
+  "$(grep -n 'terraform_remote_state\|terraform output\|state list\|\.tfstate' "$IDLE" || true)"
+
+check "verify-idle requires the AWS CLI" "0" \
+  "$(if grep -q 'require_cmd aws' "$IDLE"; then echo 0; else echo 1; fi)"
+
+# The four ephemeral services are the ones in which this project owns nothing
+# that survives a full teardown, which is what makes the rule expressible
+# without an allowlist of the fourteen kinds of thing that do. Plan §D9.
+for service in ec2 elasticloadbalancing ecs dynamodb; do
+  check "the sweep covers $service" "0" \
+    "$(if grep -q "$service" "$IDLE"; then echo 0; else echo 1; fi)"
+done
+
 report

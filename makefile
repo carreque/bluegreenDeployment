@@ -293,6 +293,14 @@ test-lambdas: deps ## Run the Lambda handler suite
 test-scripts: ## Run the shell suite for scripts/ (no AWS session needed)
 	@./scripts/tests/run.sh
 
+# Deliberately separate from teardown, and re-runnable. Folded in, "the destroy
+# failed" and "the destroy succeeded but something survived" would be the same
+# red exit from the same command — and there would be no way to check an account
+# nobody tore down today. Plan §D9.
+.PHONY: verify-idle
+verify-idle: ## Prove nothing billable survives; SCOPE=prod|staging|network (needs an AWS session)
+	@./scripts/verify-idle.sh
+
 # ---------------------------------------------------------------------------
 # Phase 8 — application pipeline
 # ---------------------------------------------------------------------------
