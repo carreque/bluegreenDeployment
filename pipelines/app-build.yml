@@ -1,0 +1,31 @@
+# Test, build, SBOM, push, publish. The Build stage's only action.
+#
+# Installs nothing. Docker is in the CodeBuild image; the interpreter and the
+# database are the two digest-pinned containers scripts/pipeline-app-build.sh
+# starts, and syft and skopeo are two more that build-image.sh's siblings
+# already run that way. Nothing here needs Terraform.
+#
+# BGD_ECR_REPOSITORY_URL and BGD_ARTIFACT_BUCKET arrive as EnvironmentVariables
+# overrides on the CodePipeline action, so this build reads no Terraform state
+# and needs no backend.
+version: 0.2
+
+env:
+  # Read by every later stage as #{Build.IMAGE_TAG} and, in the smoke action,
+  # #{Build.IMAGE_DIGEST}. Renaming one of these does not fail anything: the
+  # deploy action receives the literal placeholder and tries to deploy it as a
+  # tag. A test in infra/foundation/tests/app_pipeline_shape.tftest.hcl asserts
+  # these names still match local.app_build_exported_variables.
+  exported-variables:
+    - IMAGE_TAG
+    - IMAGE_DIGEST
+
+phases:
+  build:
+    commands:
+      - ./scripts/pipeline-app-build.sh
+      # The script runs as a child process, so its exports do not reach this
+      # shell. It writes the two variables to build-vars.env instead and this
+      # sources them into the environment CodeBuild reads exported-variables
+      # from. `set -a` is what marks them exported.
+      - set -a && . ./build-vars.env && set +a

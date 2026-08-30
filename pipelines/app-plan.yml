@@ -1,0 +1,42 @@
+# Plan production against the tag the Build stage produced, and publish the
+# workspace — saved plan included — for the Apply action in the same stage.
+#
+# APP_SCOPE and IMAGE_TAG arrive as EnvironmentVariables overrides on the
+# CodePipeline action.
+version: 0.2
+
+env:
+  # Read by the stage's manual approval action as #{PlanProd.PLAN_SUMMARY} and
+  # #{PlanProd.PLAN_URL}. Renaming one of these does not fail anything: the
+  # approval message simply shows the literal placeholder. A test in
+  # infra/foundation/tests/app_pipeline_shape.tftest.hcl asserts these names
+  # still match local.app_plan_exported_variables.
+  exported-variables:
+    - PLAN_STATUS
+    - PLAN_SUMMARY
+    - PLAN_URL
+
+phases:
+  install:
+    commands:
+      - ./scripts/install-terraform.sh
+
+  build:
+    commands:
+      - ./scripts/pipeline-deploy.sh plan prod
+      # The script runs as a child process, so its exports do not reach this
+      # shell. It writes the three variables to plan-vars.env instead and this
+      # sources them into the environment CodeBuild reads exported-variables
+      # from. `set -a` is what marks them exported.
+      - set -a && . ./plan-vars.env && set +a
+
+artifacts:
+  # The whole workspace, so Apply gets the source tree and the saved plan
+  # together. .terraform/ is excluded and Apply re-inits: the directory is
+  # provider binaries, roughly 700 MB of them, and re-downloading from the
+  # committed .terraform.lock.hcl gives byte-identical versions in less time
+  # than uploading and downloading them costs.
+  files:
+    - '**/*'
+  exclude-paths:
+    - '**/.terraform/**'

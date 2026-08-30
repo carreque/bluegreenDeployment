@@ -110,6 +110,64 @@ The CodePipeline **standard Amazon ECS deploy action** can drive an ECS native b
 
 **Important limitation:** that action deploys **container image changes only** — not other service configuration changes. This directly shapes the pipeline design (see §5): task definition and service shape must be owned by Terraform, with only images flowing through the app pipeline.
 
+> **Amended in Phase 8 (2026-08-30). The finding stands, and this project does
+> not use it.**
+>
+> The heading is still true — the standard ECS deploy action *can* drive a
+> native blue/green deployment, and no CodeDeploy stage is required. What was
+> wrong was the next paragraph's confidence that the image-only limitation is
+> the whole of the limitation, and that Terraform owning the service shape
+> makes it a non-issue.
+>
+> **The limitation that actually bites is narrower and worse: the action can
+> set an image URI and nothing else in the container definition.** It reads the
+> service's current task definition revision, substitutes the image URI of each
+> container named in `imagedefinitions.json`, and copies every other field —
+> including `environment` — from that revision. There is no mechanism on this
+> action to set an environment variable. (`CodeDeployToECS` takes a full
+> `taskdef.json` and can; that is the CodeDeploy path, which §1.2 and the
+> roadmap both discarded, and which this native strategy replaces.)
+>
+> Both of this project's task definitions carry
+>
+> ```hcl
+> { name = "BGD_IMAGE_DIGEST", value = data.aws_ecr_image.api.image_digest }
+> ```
+>
+> in that environment, because Phase 2 discovered that **an image cannot
+> contain its own digest** — the digest is a function of the bytes, so a build
+> argument carrying it changes it. The digest therefore has to be injected at
+> deploy time, and the only writer of a task definition is Terraform.
+>
+> A revision produced by the ECS action would carry the **new image alongside
+> the previous image's digest**, and nothing about the deployment would fail.
+> `/version` — this design's own stated blue/green evidence surface (§4) —
+> would report a digest that is not what is running. `scripts/smoke.sh`'s
+> fourth assertion, the one that makes it a deployment check rather than a
+> liveness check, would fail on every deploy. And the action registers a
+> revision Terraform does not know about, so `aws_ecs_service.task_definition`
+> drifts and the next `infra/**` merge reverts it, mid-deployment, on
+> production.
+>
+> **So the app pipeline's deploy actions run Terraform**, applying the
+> environment layer with `-var image_tag=<the tag just built>` and letting
+> `data.aws_ecr_image` resolve that tag to a digest **once** — feeding both the
+> container's `image` field and `BGD_IMAGE_DIGEST` from the same expression.
+> There is one identifier for "what is running" and it cannot disagree with
+> itself.
+>
+> **The property this section cares about is preserved, by a better mechanism
+> than the one it named.** Only images flow through the app pipeline: the
+> environment layers' Terraform is whatever is on `main`, and the single input
+> the pipeline supplies is a tag. An `app/**` merge cannot change the service
+> shape, because an `app/**` merge does not change `infra/`. See the Phase 8
+> plan's §D2 and §F1.
+>
+> This is worth stating rather than quietly working around, because the finding
+> above is *correct* and a later reader would otherwise reasonably ask why the
+> project ignored its own research. It did not: the action is unusable here for
+> a reason that has nothing to do with blue/green, and predates it.
+
 ### 1.6 Python 3.14 is viable — and preferable
 
 The local environment runs Python 3.14.6. Verified against Docker Hub and PyPI:
@@ -355,6 +413,50 @@ Source → Build (unit tests, coverage, image, SBOM, push) → Deploy staging
 
 This split is what makes the "image changes only" limitation of the CodePipeline ECS action (§1.5) a non-issue: task definition and service shape are owned by Terraform in the infra pipeline; only images flow through the app pipeline.
 
+> **Amended in Phase 8 (2026-08-30).** The app pipeline as built, with the two
+> differences from the sketch above marked:
+>
+> ```
+> Source ─ CODEBUILD_CLONE_REF, because the build reads git
+>   │
+> Build ─ tests in python:3.14.6-slim, image, SBOM, push, publish
+>   │       exports IMAGE_TAG and IMAGE_DIGEST
+>   │
+> DeployStaging ─ skipped unless APP_SCOPE matches ^(staging|all)$
+>   ├─ 1. Deploy   terraform apply -auto-approve -var image_tag=…   ← Terraform, not
+>   │              then record /bgd/staging/image_tag                  the ECS action
+>   └─ 2. Smoke    scripts/smoke.sh staging, credentials: none      ← its own action,
+>   │                                                                  its own role
+> Prod ─ skipped unless APP_SCOPE == all
+>   ├─ 1. Plan     terraform plan -out=pipeline.tfplan, exports PLAN_SUMMARY
+>   ├─ 2. Approve  manual, showing that summary
+>   └─ 3. Apply    terraform apply pipeline.tfplan  ← the saved plan, no -var
+>                  then record /bgd/prod/image_tag  ← after the apply, never before
+> ```
+>
+> **"Deploy staging" is not an ECS deploy action** — see §1.5's amendment for
+> why it cannot be. Both deploy actions run Terraform, and the paragraph above
+> stays true by mechanism rather than by the action's limitation.
+>
+> **Production is Plan → Approve → Apply**, matching the infra pipeline's stage
+> shape, rather than one approval followed by a deploy. The approval then
+> approves a specific change — this digest, this task definition revision —
+> and the apply applies that saved plan rather than computing a new one.
+>
+> **Smoke is a separate action**, with its own project and a role that makes no
+> AWS API call at all: it is handed the URL and the digest by the deploy action
+> beside it. Folding it into the deploy would make "the apply failed" and "the
+> deployment succeeded but the service is wrong" indistinguishable in the
+> pipeline view.
+>
+> Staging has no approval, deliberately: its stated job is to be the gate, and a
+> human gate in front of it would be a strange shape.
+>
+> Both pipelines' triggers watch their own buildspecs and scripts as well as
+> their source directory — `pipelines/infra-*.yml` and `pipelines/app-*.yml`,
+> never `pipelines/**` — because a change to a buildspec changes what every
+> stage does, and a shared glob would fire both pipelines on one merge.
+
 ---
 
 ## 7. Blue/green and rollback
@@ -495,6 +597,50 @@ Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task 
 >
 > With the CodePipeline role, this phase creates four. Design §8.1's list is
 > therefore nine roles, not six.
+
+> **Amended in Phase 8 (2026-08-30). Nine roles are fifteen.** The application
+> pipeline adds six: `app-pipeline`, `app-image`, `app-deploy-staging`,
+> `app-smoke`, `app-plan-prod` and `app-deploy-prod`.
+>
+> The forcing fact is Phase 7's, unchanged and applied a second time: a build's
+> permissions come from `service_role` on the project, so five roles that differ
+> in what a build may do means five projects. What is new here is that **two of
+> the six are separated structurally rather than by policy**, and that is a
+> different kind of claim from anything above.
+>
+> `app-deploy-staging` and `app-deploy-prod` both attach `AdministratorAccess`,
+> for the reason the Phase 7 amendment above gives for `infra-apply`: each runs
+> `terraform apply` on a layer that creates IAM roles, and a principal that can
+> create a role and attach a policy to it can already grant itself anything.
+> **A policy separation between two such roles would be fiction.** They are two
+> roles anyway, because the separation that *is* real is which principal each
+> stage's actions run as: the staging deploy action physically cannot act as the
+> production one. That is the only boundary available given the paragraph above,
+> and a test asserts the two ARNs differ so a later simplification has to argue
+> with it.
+>
+> At the other end, `app-smoke` joins `infra-validate` as a role that makes **no
+> AWS API call at all**. `scripts/smoke.sh` needs `curl` and `jq`; the URL and
+> the digest it asserts on are handed to it as action-level environment
+> variables by the deploy action beside it, precisely so it need not read
+> Terraform state or describe a service. Its policy grants its log group and the
+> artifact bucket, and a test asserts no action outside `logs:` and `s3:`
+> appears in it — the same assertion, and the same erosion argument, as
+> `infra-validate`'s.
+>
+> One consequence of `CODEBUILD_CLONE_REF` (see §1.5's amendment and the Phase 8
+> plan's D8) shows up here: because the **build** performs the git clone rather
+> than CodePipeline, four of these roles need `codeconnections:UseConnection` on
+> the connection ARN, scoped to the one connection. `app-deploy-prod` does not,
+> and that absence is asserted — it consumes the Plan action's output artifact,
+> which is an ordinary S3 zip, and clones nothing.
+>
+> `app-smoke`'s clone grant lives in a **second policy resource** rather than
+> beside its log-group and bucket statements. That is not tidiness: merging them
+> would have meant relaxing the "nothing outside `logs:` and `s3:`" assertion to
+> admit a `codeconnections:` prefix, and the next thing added under a relaxed
+> assertion is the "just one read" the assertion exists to refuse. See the
+> Phase 8 plan's D5, D6 and F13.
 
 ---
 

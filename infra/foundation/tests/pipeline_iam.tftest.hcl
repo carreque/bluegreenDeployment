@@ -94,6 +94,41 @@ override_resource {
   values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-infra-apply-role" }
 }
 
+# Phase 8's six roles. Nothing in this file asserts on them, and they are here
+# because `command = apply` applies the WHOLE module: their five projects
+# validate service_role client-side too, and an un-overridden mock ARN is an
+# eight-character string rather than an ARN. Found while adding the app
+# pipeline (Phase 8 §F16); a Phase 9 role set will need the same three lines.
+override_resource {
+  target = aws_iam_role.app_pipeline
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-pipeline-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_image
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-image-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_deploy_staging
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-deploy-staging-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_smoke
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-smoke-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_plan_prod
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-plan-prod-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_deploy_prod
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-deploy-prod-role" }
+}
+
 variables {
   project_name = "bgd"
   region       = "us-east-1"

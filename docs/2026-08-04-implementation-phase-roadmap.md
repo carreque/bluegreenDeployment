@@ -499,6 +499,29 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > used. **No amendment needed there** — recorded explicitly, as Phases 3, 5 and
 > 6 did, so the absence reads as checked rather than overlooked.
 
+> **Amended again in Phase 8 (2026-08-30) — the trigger narrows.** Two of the
+> four path patterns above matched files Phase 8 creates, and this is recorded
+> in *both* phases' sections so a reader checking Phase 7's file against Phase
+> 7's amendment finds the change accounted for.
+>
+> - `pipelines/**` matched `pipelines/app-build.yml`; `scripts/pipeline-*.sh`
+>   matched `scripts/pipeline-app-build.sh` and `scripts/pipeline-deploy.sh`.
+>   Left alone, **every application-buildspec edit would have started a
+>   four-approval infrastructure deployment** alongside the application
+>   deployment it was meant to start. They narrow to `pipelines/infra-*.yml`
+>   and `scripts/pipeline-terraform.sh`. The naming was chosen in Phase 7 to
+>   make this a two-line fix, and it was.
+> - **`scripts/tf.sh` and `scripts/lib/common.sh` join the list**, and that is a
+>   pre-existing gap rather than a consequence of Phase 8. Every plan and every
+>   apply in this pipeline runs both, so by D12's own argument they are the
+>   pipeline's executable content and always were. Nobody noticed because
+>   neither had changed since Phase 3.
+>
+> The list is now six patterns: `infra/**`, `pipelines/infra-*.yml`,
+> `scripts/pipeline-terraform.sh`, `scripts/install-terraform.sh`,
+> `scripts/tf.sh`, `scripts/lib/common.sh`. A test asserts the set exactly, so
+> widening either of the first two back fails the offline gate.
+
 ### Phase 8 — Application pipeline
 
 - CodePipeline v2 filtered to `app/**` on `main`.
@@ -511,6 +534,118 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 Only images flow through this pipeline. Task definition and service shape stay owned by Terraform, which is what makes the ECS action's image-only limitation (§1.5) a non-issue.
 
 **Exit criteria:** a commit under `app/` reaches production through the full path, with the blue/green deployment and its hooks firing as designed.
+
+> **Amended in Phase 8 (2026-08-30).** The phase built more than this task list
+> names, and departs from one of its bullets outright. Everything below is
+> decided and argued in [the Phase 8
+> plan](./phases/phase8/2026-08-30-phase-08-implementation-plan.md)'s §0.1.
+>
+> - **The standard ECS deploy action is not used, and cannot be.** The bullet
+>   above says "deploy to staging via the standard ECS deploy action", and that
+>   action takes an `imagedefinitions.json` and replaces **container image URIs
+>   only**, copying every other field — the container `environment` included —
+>   from the current task definition revision. Both of this project's task
+>   definitions set `BGD_IMAGE_DIGEST` from `data.aws_ecr_image.api.image_digest`
+>   in that environment, so a revision produced by the action would carry the
+>   new image **alongside the previous image's digest**. Three things break at
+>   once and none of them fails the deployment: `/version` reports a digest that
+>   is not what is running (design §4's stated blue/green evidence surface, and
+>   Phase 6's second exit criterion is read off it); `scripts/smoke.sh`'s fourth
+>   assertion fails on every deploy; and the action registers a revision
+>   Terraform does not know about, so `aws_ecs_service.task_definition` drifts
+>   and the next `infra/**` merge reverts it — mid-deployment, on production.
+>
+>   So the deploy actions run **Terraform**: `terraform apply -var image_tag=…`,
+>   letting `data.aws_ecr_image` resolve the tag to a digest **once**, feeding
+>   both the container's `image` and `BGD_IMAGE_DIGEST` from the same
+>   expression. There is one identifier for "what is running" and it cannot
+>   disagree with itself.
+>
+>   **The paragraph above the exit criteria still holds, and by a better
+>   mechanism than it claimed.** Only images flow through this pipeline: the
+>   environment layers' Terraform is whatever is on `main`, and the single input
+>   the pipeline supplies is a tag. An `app/**` merge cannot change the service
+>   shape, because an `app/**` merge does not change `infra/`. What is lost is
+>   the *use* of design §1.5's research finding, which is correct and unusable
+>   here for a reason that has nothing to do with blue/green. §1.5 and §6 are
+>   amended to say so rather than left describing a mechanism the project does
+>   not use.
+> - **Five CodeBuild projects and six IAM roles**, where the task list implies
+>   neither and design §8.1 named two. Phase 7's F3 applied again: a build's
+>   permissions come from `service_role` on the project, so roles that differ in
+>   what a build may do mean projects that differ. Unlike Phase 7 there is no
+>   shared deploy project — `app-deploy-staging` and `app-deploy-prod` differ in
+>   their **role**, not only in a variable, and that is the point. Two
+>   administrator roles cannot be told apart by policy, so the separation
+>   between staging and production is **structural**: the staging deploy action
+>   physically cannot act as the production principal.
+> - **`APP_SCOPE`, which the task list does not mention.** Three values,
+>   cumulative, naming where a run *stops*:
+>
+>   | `APP_SCOPE` | Build | DeployStaging | Prod |
+>   |---|---|---|---|
+>   | `build` | run | skip | skip |
+>   | `staging` | run | run | skip |
+>   | `all` | run | run | run |
+>
+>   Cumulative for the same reason `DEPLOY_SCOPE` is: the stages are ordered by
+>   dependency, and deploying an image that was never built, or promoting one
+>   that never passed staging smoke, are the two failures the ordering prevents.
+>   Out-of-scope stages **skip** rather than fail, so a deliberately narrow run
+>   finishes green and Phase 9's change-failure-rate does not count a deliberate
+>   stop as a failure. `build` earns its place beyond symmetry: Phase 11 needs
+>   to push a deliberately broken image *without* deploying it. Enforced twice,
+>   for Phase 7 D4's asymmetry argument unchanged.
+> - **`CODEBUILD_CLONE_REF`, not `CODE_ZIP`**, and the reproducibility
+>   requirement is what forces it. `image_build_identity()` derives the tag,
+>   `SOURCE_DATE_EPOCH` and `BUILT_AT` from `git rev-parse`, `git status` and
+>   `git log`; a `CODE_ZIP` workspace has no `.git`, so all three fail. The
+>   loud failure is fine — the quiet one is someone "fixing" it with a wall-clock
+>   fallback, which compiles and silently ends the property design §4.1
+>   *requires*. Two accepted costs: the source artifact can only be consumed by
+>   CodeBuild actions, and the four roles whose builds take it need
+>   `codeconnections:UseConnection`, because the build performs the clone.
+> - **The SSM parameters are written *after* a successful apply, never before.**
+>   Phase 7's D8 created them and named this phase as the writer; the decision
+>   here is *when*. Writing them at build time would open a real hole: an
+>   `infra/**` merge landing between Build and the production approval would
+>   plan production against the new tag and deploy it — bypassing the approval,
+>   with every stage of both runs green. Writing prod's parameter only in prod's
+>   Apply action closes it. The corollary is that the tag reaching Terraform
+>   comes from `#{Build.IMAGE_TAG}`, never from SSM: SSM is the record, not the
+>   channel.
+> - **The test suite runs in `python:3.14.6-slim`, not through `make test`.**
+>   CodeBuild's ARM image ships Python 3.11 and 3.12; `.python-version` pins
+>   3.14.6 and `scripts/create-venv.sh` refuses any other interpreter,
+>   deliberately, per Phase 1's F1. Same suites, same interpreter, same
+>   `--require-hashes` locks, same coverage gate — reached differently, and the
+>   difference is the venv. Stated plainly because "the same command" would be
+>   an overclaim.
+> - **Staging applies directly; production is Plan → Approve → Apply.** Staging's
+>   stated job is to fail fast, and a human gate in front of the environment
+>   whose purpose is to be the gate would be a strange shape. Production takes
+>   Phase 7's stage shape unchanged.
+> - **Smoke is its own action** with its own project and its own role, and that
+>   role makes **no AWS API call at all** — it is handed the URL and the digest
+>   by the deploy action beside it. Folding it into the deploy buildspec would
+>   have made "the apply failed" and "the deployment succeeded but the service
+>   is wrong" indistinguishable in the pipeline view.
+> - **The trigger's path filter is split across two `push` blocks**, because
+>   `filePaths.includes` accepts a maximum of eight patterns and the list has
+>   eleven. The two are OR'd, so it is exactly equivalent to one list — but each
+>   must repeat the branch filter, since a filter that omits it matches every
+>   branch.
+> - **Phase 7's trigger narrowed**, recorded in that phase's section above as
+>   well as here.
+>
+> **The exit criterion is not met by the branch alone.** It needs a pipeline
+> that exists, a merge that happened and a deployment that ran, and the Phase 8
+> session created no AWS resource. It is met by [the
+> runbook](./runbooks/phase-08-app-pipeline.md), step 6.
+>
+> §2's branch table row 8 reads `feat/Phase8_AppPipeline`, which is the branch
+> used. **No amendment needed there** — recorded explicitly, as Phases 3, 5, 6
+> and 7 did, so the absence reads as checked rather than overlooked.
 
 ### Phase 9 — Observability and release metrics
 

@@ -52,22 +52,39 @@ resource "aws_codepipeline" "infra" {
           includes = [var.github_branch]
         }
 
-        # The roadmap says infra/**. The other three are the pipeline's own
-        # executable content: a change to a buildspec or to
-        # pipeline-terraform.sh changes what every stage does, and it would be
-        # odd for that to reach production only when someone next edits a .tf
-        # file.
+        # The roadmap says infra/**. The rest is the pipeline's own executable
+        # content: a change to a buildspec or to pipeline-terraform.sh changes
+        # what every stage does, and it would be odd for that to reach
+        # production only when someone next edits a .tf file.
         #
         # scripts/** as a whole is deliberately excluded — it also holds
-        # build-image.sh, smoke.sh and generate-sbom.sh, which belong to Phase
-        # 8's pipeline, and watching the directory would run a four-approval
-        # infra deployment on an application change. Plan §D12.
+        # build-image.sh, smoke.sh and generate-sbom.sh, which belong to the
+        # application pipeline, and watching the directory would run a
+        # four-approval infra deployment on an application change. Plan §D12.
+        #
+        # NARROWED IN PHASE 8, and this is not cosmetic. As originally written
+        # this list held `pipelines/**` and `scripts/pipeline-*.sh`, and both
+        # match files Phase 8 creates: pipelines/app-build.yml, and both
+        # pipeline-app-build.sh and pipeline-deploy.sh. Left alone, every
+        # application-buildspec edit would have started a four-approval
+        # infrastructure deployment alongside the application deployment it was
+        # meant to start. The naming was chosen to make this a two-line fix.
+        # Phase 8 §F4.
+        #
+        # scripts/tf.sh and scripts/lib/common.sh join the list at the same
+        # time, and that is a pre-existing gap rather than a consequence of
+        # Phase 8: every plan and every apply here runs both, so by the D12
+        # argument above they are this pipeline's executable content and always
+        # were. Nobody noticed because neither had changed since Phase 3.
+        # Recorded as a Phase 7 amendment.
         file_paths {
           includes = [
             "infra/**",
-            "pipelines/**",
-            "scripts/pipeline-*.sh",
+            "pipelines/infra-*.yml",
+            "scripts/pipeline-terraform.sh",
             "scripts/install-terraform.sh",
+            "scripts/tf.sh",
+            "scripts/lib/common.sh",
           ]
         }
       }

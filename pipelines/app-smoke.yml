@@ -1,0 +1,21 @@
+# Smoke test staging over TLS. The DeployStaging stage's second action, and the
+# gate that decides whether production is offered the image at all.
+#
+# The identical script `make smoke-staging` runs. Phase 5 §D4 wrote it as shell
+# rather than a pytest suite so that this phase could run the same command, and
+# it has carried the BGD_SMOKE_URL / BGD_SMOKE_DIGEST overrides since then for
+# exactly this caller.
+#
+# Both arrive as EnvironmentVariables overrides on the CodePipeline action,
+# from the deploy action's namespace. That is why this build's role grants its
+# log group and the artifact bucket and nothing else: it reads no Terraform
+# state and describes no service.
+#
+# Installs nothing — curl and jq are both in the CodeBuild image, and this is
+# the one build in the pipeline that needs no Terraform.
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - ./scripts/smoke.sh staging

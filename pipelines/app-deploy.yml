@@ -1,0 +1,29 @@
+# Apply one environment layer with the tag the Build stage produced, then
+# record it. The DeployStaging stage's first action.
+#
+# ENVIRONMENT, APP_SCOPE and IMAGE_TAG arrive as EnvironmentVariables overrides
+# on the CodePipeline action. IMAGE_TAG is #{Build.IMAGE_TAG} — never a value
+# read from SSM, because SSM records what IS deployed rather than telling a run
+# what to deploy (plan §D9).
+version: 0.2
+
+env:
+  # Handed to the smoke action beside this one as BGD_SMOKE_URL and
+  # BGD_SMOKE_DIGEST, which is what lets that build hold no AWS credentials at
+  # all (plan §D6). Asserted against local.app_deploy_exported_variables.
+  exported-variables:
+    - SMOKE_URL
+    - SMOKE_DIGEST
+
+phases:
+  install:
+    commands:
+      - ./scripts/install-terraform.sh
+
+  build:
+    commands:
+      - ./scripts/pipeline-deploy.sh deploy "$ENVIRONMENT"
+      # Written on every path out of the script, the skip included — a missing
+      # file here would fail the build and turn a correct skip into a red
+      # stage.
+      - set -a && . ./deploy-vars.env && set +a
