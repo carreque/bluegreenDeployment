@@ -197,3 +197,48 @@ variable "app_pipeline_artifact_retention_days" {
   type        = number
   default     = 30
 }
+
+# ---------------------------------------------------------------------------
+# Phase 9 — the observability plane
+# ---------------------------------------------------------------------------
+
+variable "metric_namespace" {
+  description = <<-EOT
+    CloudWatch namespace the collector writes release metrics under.
+
+    A variable rather than a constant because it is named in three places that
+    must agree — the collector's environment, the IAM condition that confines
+    PutMetricData to it, and every dashboard widget — and a namespace typo is
+    silent: the metrics land somewhere real and the dashboard stays empty.
+  EOT
+  type        = string
+  default     = "ReleaseMetrics"
+}
+
+variable "mttr_lookback_days" {
+  description = <<-EOT
+    How far back the collector looks for an unrecovered failure when a
+    deployment succeeds (plan D7).
+
+    Thirty days. Long enough that a failure left over a holiday is still found;
+    short enough that GetMetricData stays one cheap call. A recovery older than
+    this is not reported, which is the right answer — an MTTR of five weeks
+    describes a project that was not being worked on.
+  EOT
+  type        = number
+  default     = 30
+}
+
+variable "collector_log_retention_days" {
+  description = <<-EOT
+    Retention on the collector's log group.
+
+    Longer than the hooks' 14 days, because these lines are the audit trail
+    behind every number on the dashboard — which event arrived, which basis the
+    lead time used, which event names ECS really emits (plan F3). Matching
+    var.pipeline_log_retention_days at 30 keeps the two pipeline-adjacent log
+    families on one number.
+  EOT
+  type        = number
+  default     = 30
+}
