@@ -99,6 +99,24 @@ env_rank() {
   esac
 }
 
+# The marker's four values mapped onto env_rank's scale.
+#
+# The marker speaks DEPLOY_SCOPE's vocabulary — foundation, network, staging,
+# all — and this script ranks environments, not layers. `foundation` and
+# `network` both mean "neither environment exists", so both map below staging.
+#
+# Deliberately a mapping rather than a shared rank table: the two scales
+# measure different things and collapsing them would put `build` and `network`
+# on the same number, which is true of nothing. Plan §D5.
+marker_env_rank() {
+  case "$1" in
+    foundation | network) echo 1 ;;
+    staging) echo 2 ;;
+    all) echo 3 ;;
+    *) echo 0 ;;
+  esac
+}
+
 # Written on every path out of deploy mode, including the skip.
 #
 # The skip case is not optional. pipelines/app-deploy.yml sources this file,
@@ -177,6 +195,32 @@ if (($(env_rank "$env_name") > $(scope_rank "$scope"))); then
   case "$mode" in
     deploy) write_deploy_vars "" "" ;;
     plan) write_vars "skipped" "Skipped. $env_name is outside APP_SCOPE=$scope." "$(build_url)" ;;
+  esac
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Gate 2: the platform marker
+# ---------------------------------------------------------------------------
+#
+# APP_SCOPE says how far this run wants to go; the marker says how far the
+# platform actually is. Deploying an image into an environment `make teardown`
+# destroyed fails at the remote-state read — which since Phase 9 also sends an
+# email and counts in change-failure-rate. Skipping green instead costs a line
+# in the console and tells the truth. Plan §D5.
+#
+# Unlike pipeline-terraform.sh there is no exemption: both environments are
+# above the marker's floor, and the Build stage — which legitimately runs while
+# the platform is down, and whose image is waiting when it comes back — is a
+# different script that never reaches here.
+deployed="$(read_deployed_scope)"
+
+if (($(env_rank "$env_name") > $(marker_env_rank "$deployed"))); then
+  info "$env_name is torn down ($DEPLOYED_SCOPE_PARAM = $deployed) — nothing to do"
+  info "run \`make rebuild\` to bring it back"
+  case "$mode" in
+    deploy) write_deploy_vars "" "" ;;
+    plan) write_vars "skipped" "Skipped. $env_name is torn down ($DEPLOYED_SCOPE_PARAM = $deployed); run make rebuild." "$(build_url)" ;;
   esac
   exit 0
 fi
