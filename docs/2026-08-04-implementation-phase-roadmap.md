@@ -546,6 +546,36 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > the offline gate for a reason having nothing to do with what that file
 > tests.
 
+> **Amended in Phase 10 (2026-08-30) — the driver now clamps to a platform
+> marker.** Recorded here as well as in Phase 10's section, following the
+> precedent the trigger amendments above set for a cross-phase change.
+>
+> `scripts/pipeline-terraform.sh` reads `/bgd/platform/deployed_scope` and takes
+> the smaller of it and `DEPLOY_SCOPE`. A layer above the result **skips green**,
+> with a message that names the marker and `make rebuild` rather than blaming
+> the scope — `"network is outside DEPLOY_SCOPE=all"` would be a lie, and an
+> operator reading it would go looking for a bug in scope handling. The skip
+> still writes `plan-vars.env`, so `pipelines/infra-plan.yml` sourcing it cannot
+> turn a correct skip into a red stage.
+>
+> `foundation` is exempt from the read and must be: it is the layer that
+> *creates* the parameter, so on a fresh account it does not exist when the
+> layer is first planned. Every other layer treats an unreadable marker as
+> **fatal** rather than assuming `all` — a gate that fails open is not a gate,
+> and assuming `all` would let a lost `ssm:GetParameter` silently restore the
+> behaviour the marker exists to remove.
+>
+> The two local `scope_rank`/`layer_rank` functions moved to `lib/common.sh` as
+> `platform_scope_rank`/`platform_layer_rank`; the `platform_` prefix is not
+> decoration, because `pipeline-deploy.sh` defines a `scope_rank` of its own over
+> a different vocabulary and bash redefines a function silently.
+>
+> **The trigger's seven patterns are unchanged.** The three watched files this
+> phase edits — `scripts/pipeline-terraform.sh`, `scripts/tf.sh`,
+> `scripts/lib/common.sh` — are already matched, and the three operator scripts
+> are not pipeline content: no stage runs them, so a change to one changes
+> nothing about what a run does.
+
 ### Phase 8 — Application pipeline
 
 - CodePipeline v2 filtered to `app/**` on `main`.
@@ -670,6 +700,29 @@ Only images flow through this pipeline. Task definition and service shape stay o
 > §2's branch table row 8 reads `feat/Phase8_AppPipeline`, which is the branch
 > used. **No amendment needed there** — recorded explicitly, as Phases 3, 5, 6
 > and 7 did, so the absence reads as checked rather than overlooked.
+
+> **Amended in Phase 10 (2026-08-30) — the deploy driver clamps to the platform
+> marker, and §11 of this phase's runbook is now wrong.** Recorded here as well
+> as in Phase 10's section.
+>
+> `scripts/pipeline-deploy.sh` reads `/bgd/platform/deployed_scope` and skips an
+> environment the marker says is torn down — green, writing `deploy-vars.env` or
+> `plan-vars.env` as the mode requires, so a correct skip cannot become a red
+> stage. The marker's four values are mapped onto `env_rank`'s scale rather than
+> compared against it directly: `APP_SCOPE` ranks `build`/`staging`/`all` and
+> this script ranks environments, and collapsing the two scales would put
+> `build` and `network` on the same number, which is true of nothing. There is
+> no exemption here — the Build stage, which legitimately runs while the
+> platform is down and whose image is waiting when it comes back, is a different
+> script that never reaches the gate.
+>
+> **[This phase's runbook §11](./runbooks/phase-08-app-pipeline.md) told you to
+> disable both pipeline triggers in the console after a teardown** and re-enable
+> them as the first step of the Phase 10 rebuild — a fourth manual step in a
+> project whose documents claim there are exactly three. It is rewritten in the
+> same commit: there is now nothing to disable, a merge while torn down is safe
+> and creates nothing, and `make rebuild` raises the marker again as its last
+> act on each layer.
 
 ### Phase 9 — Observability and release metrics
 
@@ -798,6 +851,90 @@ Only images flow through this pipeline. Task definition and service shape stay o
 - **A full teardown and rebuild cycle executed and verified**, not merely written. This is the honest test of whether the infrastructure as code is complete.
 
 **Exit criteria:** after a teardown-and-rebuild cycle, both environments serve traffic again with no manual step other than waiting.
+
+> **Amended in Phase 10 (2026-08-30).** The four bullets above describe two
+> commands and a runbook. The branch delivers those and five things the list
+> does not name, each of which turned out to be load-bearing rather than
+> optional.
+>
+> - **A marker, and both pipelines clamp to it.**
+>   `/bgd/platform/deployed_scope` is an SSM `String` in `foundation` holding
+>   one of `foundation | network | staging | all` — the same four values
+>   `DEPLOY_SCOPE` already uses, deliberately, since `pipeline-terraform.sh`
+>   already ranks them and `foundation/locals.tf` already orders them. It lives
+>   in `foundation` because it has to survive what it describes: anywhere else
+>   and the record of "the platform is torn down" is destroyed by the teardown
+>   (plan D2). Both pipeline drivers take the smaller of their own scope and the
+>   marker, and a layer above that **skips green rather than failing** — since
+>   Phase 9 a failed run emails you and counts in change-failure-rate, so a run
+>   that correctly declined to deploy into a torn-down account must not look
+>   like a bad deployment (D5).
+>
+> - **`SCOPE` on both operator scripts**, cumulative, naming where the run
+>   stops, and refusing an unrecognised value by name rather than falling back
+>   to the safe end — a `SCOPE=staginng` typo that silently tore down everything
+>   would be a bad surprise, and one that silently tore down nothing while
+>   printing success would be worse (D7). **No `SCOPE` value and no flag reaches
+>   `foundation` or `bootstrap`** (D16); that is what §1's five-layer split is
+>   for, and it is now enforced rather than described.
+>
+> - **`make verify-idle`**, which the task list does not mention at all and
+>   which is the answer to "did the teardown actually work". It reads AWS
+>   directly and **opens no state file**, because the three cases it exists for
+>   — a resource created by hand and never in state, a state file that drifted,
+>   and a destroy that failed part-way — are exactly the cases where Terraform
+>   agrees with itself and is wrong (D9). A Cost Explorer check was considered
+>   and rejected: its data lags roughly a day, so run after a teardown it
+>   reports the day the platform was up and reports it as though it were the
+>   answer (D15).
+>
+> - **A dependency-free shell suite**, and `make test-scripts` joins the offline
+>   gate and the pipeline's Validate stage. This phase adds roughly six hundred
+>   lines of shell whose failure mode is destroying the wrong thing, plus rank
+>   arithmetic that decides whether production is deployed into; Phase 8's
+>   `bash -n` plus a transcript in a verification document is honest evidence
+>   but is not a regression test, because nothing re-runs it (D12, D14).
+>
+> - **`layer_dir()` moved into `lib/common.sh`.** `tf.sh`'s own comment asked
+>   for it — the map existed in three places and `rebuild.sh` would have been
+>   the fourth. `lint-infra.sh` is deliberately not converted, because its
+>   `layer_path` returns a path relative to `infra/` and must pass an
+>   already-relative path through unchanged (D13, F6).
+>
+> **The gap [Phase 8's runbook §11](./runbooks/phase-08-app-pipeline.md) handed
+> to this phase by name is closed.** That section told you to disable both
+> pipeline triggers in the console after a teardown and re-enable them as the
+> first step of the rebuild — a fourth manual step in a project whose documents
+> claim there are exactly three. There is now nothing to disable. The corollary
+> the task list does not state, and which will surprise someone eventually:
+> **a merge to `main` can no longer rebuild a torn-down layer.** That is
+> deliberate, and it is the cheap direction — the alternative is a $99/month
+> surprise from a merge nobody thought of as a deployment. `make rebuild` is the
+> only thing that raises the marker, and [the Phase 10
+> runbook](./runbooks/phase-10-teardown-and-rebuild.md) §9 gives the one-line
+> `aws ssm put-parameter` escape hatch for the day you want the pipeline to do
+> it instead.
+>
+> **The fourth bullet is not met by this branch**, and neither is the exit
+> criterion. The bullet asks for *a full teardown and rebuild cycle executed and
+> verified, not merely written*, and it is right to. This session created no AWS
+> resource and made no AWS API call (D1). The cycle is [the
+> runbook](./runbooks/phase-10-teardown-and-rebuild.md)'s steps 3 through 6,
+> ending with `make rebuild` exiting 0 — which by D11 means both environments
+> were smoke-tested and served the digest Terraform deployed, not merely that
+> three applies returned 0. Said plainly here rather than letting a green gate
+> imply a proven cycle, as Phases 3 through 9 did.
+>
+> What the branch's gate does prove is that every guard, every rank comparison
+> and every refusal path behaves as written: 116 shell checks across three test
+> files, plus the marker's shape, default and output asserted in
+> `infra/foundation/tests/pipeline_shape.tftest.hcl`. That is what makes the
+> runbook worth following rather than debugging.
+>
+> §2's branch table row 10 reads `feat/Phase10_TeardownRebuild`, which is the
+> branch used. **No amendment needed there** — recorded explicitly, as Phases
+> 3, 5, 6, 7, 8 and 9 did, so the absence reads as checked rather than
+> overlooked.
 
 ### Phase 11 — Rollback evidence and documentation
 
