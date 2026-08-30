@@ -193,9 +193,79 @@ def _emit_recovery_time(now: datetime, dimensions: dict[str, str]) -> None:
     return None
 
 
+def _pipeline_console_url(event: dict, pipeline: str, execution_id: str) -> str:
+    region = event.get("region", "us-east-1")
+    return (
+        f"https://{region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/"
+        f"{pipeline}/executions/{execution_id}?region={region}"
+    )
+
+
+def _release_started_at(pipeline: str, execution_id: str) -> tuple[datetime | None, str]:
+    """When the change that just reached production was made.
+
+    Preferred: the source revision's commit timestamp, which makes the metric
+    genuinely commit-to-production. Whether CodePipeline populates it for a
+    CodeConnections source cannot be confirmed offline (plan F4), so the fallback
+    is the execution's own start time — merge-to-production. The caller logs
+    which basis was used; the metric is emitted either way, because a lead-time
+    series that silently stops when an API field is absent is worse than one
+    whose basis is written beside it.
+    """
+    client = _client("codepipeline")
+
+    execution = client.get_pipeline_execution(
+        pipelineName=pipeline, pipelineExecutionId=execution_id
+    ).get("pipelineExecution", {})
+
+    for revision in execution.get("artifactRevisions") or []:
+        created = revision.get("created")
+        if created is not None:
+            return created, "commit"
+
+    summaries = client.list_pipeline_executions(pipelineName=pipeline, maxResults=100)
+    for summary in summaries.get("pipelineExecutionSummaries") or []:
+        if summary.get("pipelineExecutionId") == execution_id and summary.get("startTime"):
+            return summary["startTime"], "merge"
+
+    return None, "unavailable"
+
+
+def _emit_lead_time(pipeline: str, execution_id: str, now: datetime) -> None:
+    started_at, basis = _release_started_at(pipeline, execution_id)
+
+    if started_at is None:
+        LOGGER.warning(
+            "lead_time_basis=unavailable execution=%s; no lead time emitted", execution_id
+        )
+        return
+
+    seconds = (now - started_at).total_seconds()
+    LOGGER.info("lead_time_basis=%s seconds=%s execution=%s", basis, seconds, execution_id)
+    _put(METRIC_LEAD_TIME, seconds, "Seconds", {"Environment": _environment()})
+
+
 def _handle_codepipeline(event: dict) -> dict[str, object]:
-    LOGGER.info("codepipeline event received; Task 3 implements the outcomes")
-    return {"handled": False}
+    detail = event.get("detail") or {}
+    pipeline = detail.get("pipeline") or "unknown"
+    state = detail.get("state")
+    execution_id = detail.get("execution-id")
+
+    if state == "FAILED":
+        _put(METRIC_PIPELINE_FAILED, 1, "Count", {"PipelineName": pipeline})
+        _alert(
+            f"[bgd] Pipeline FAILED — {pipeline}",
+            f"A pipeline execution failed.\n\nexecution: {execution_id}\n\n"
+            f"{_pipeline_console_url(event, pipeline, execution_id)}\n",
+        )
+        return {"handled": True, "outcome": "failed"}
+
+    if state == "SUCCEEDED" and pipeline == os.environ.get("BGD_APP_PIPELINE"):
+        _emit_lead_time(pipeline, execution_id, _now())
+        return {"handled": True, "outcome": "succeeded"}
+
+    LOGGER.info("ignoring pipeline=%s state=%s", pipeline, state)
+    return {"handled": False, "state": state}
 
 
 def handler(event: dict, context: object) -> dict[str, object]:

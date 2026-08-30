@@ -167,3 +167,95 @@ def test_an_ordinary_failure_whose_reason_merely_contains_back_is_not_a_rollback
 
     assert _metric_names(clients["cloudwatch"]) == [h.METRIC_DEPLOYMENT_FAILED]
     assert "FAILED" in clients["sns"].published[0]["Subject"]
+
+
+class FakeCodePipeline:
+    def __init__(self, execution=None, summaries=None):
+        self._execution = execution if execution is not None else {}
+        self._summaries = summaries or []
+
+    def get_pipeline_execution(self, **kwargs):
+        self.get_kwargs = kwargs
+        return {"pipelineExecution": self._execution}
+
+    def list_pipeline_executions(self, **kwargs):
+        self.list_kwargs = kwargs
+        return {"pipelineExecutionSummaries": self._summaries}
+
+
+def _pipeline_event(state, pipeline="bgd-us-east-1-app-pipeline", execution_id="exec-1"):
+    return {
+        "source": "aws.codepipeline",
+        "region": "us-east-1",
+        "detail": {"pipeline": pipeline, "state": state, "execution-id": execution_id},
+    }
+
+
+def test_a_failed_pipeline_is_counted_per_pipeline_and_emails(clients):
+    result = h.handler(_pipeline_event("FAILED", pipeline="bgd-us-east-1-infra-pipeline"), None)
+
+    assert result["outcome"] == "failed"
+    datum = clients["cloudwatch"].puts[0]["MetricData"][0]
+    assert datum["MetricName"] == h.METRIC_PIPELINE_FAILED
+    # PipelineName, not Environment: this metric is about the pipeline, and the
+    # infra pipeline is not an environment. Plan D5.
+    assert datum["Dimensions"] == [
+        {"Name": "PipelineName", "Value": "bgd-us-east-1-infra-pipeline"}
+    ]
+    assert "bgd-us-east-1-infra-pipeline" in clients["sns"].published[0]["Subject"]
+
+
+def test_lead_time_uses_the_commit_timestamp_when_the_api_supplies_one(clients, monkeypatch):
+    committed = datetime(2026, 8, 30, 10, 0, 0, tzinfo=UTC)  # two hours before _now
+    monkeypatch.setitem(
+        h._CLIENTS,
+        "codepipeline",
+        FakeCodePipeline(execution={"artifactRevisions": [{"created": committed}]}),
+    )
+
+    h.handler(_pipeline_event("SUCCEEDED"), None)
+
+    datum = clients["cloudwatch"].puts[0]["MetricData"][0]
+    assert datum["MetricName"] == h.METRIC_LEAD_TIME
+    assert datum["Unit"] == "Seconds"
+    assert datum["Value"] == 7200.0
+
+
+def test_lead_time_falls_back_to_the_execution_start_time(clients, monkeypatch, caplog):
+    # F4: whether CodeConnections populates artifactRevisions[].created cannot be
+    # confirmed offline. Absent it, the number is merge-to-production rather than
+    # commit-to-production, and the log says which.
+    started = datetime(2026, 8, 30, 11, 30, 0, tzinfo=UTC)
+    monkeypatch.setitem(
+        h._CLIENTS,
+        "codepipeline",
+        FakeCodePipeline(
+            execution={"artifactRevisions": [{"revisionId": "abc123"}]},
+            summaries=[{"pipelineExecutionId": "exec-1", "startTime": started}],
+        ),
+    )
+
+    h.handler(_pipeline_event("SUCCEEDED"), None)
+
+    assert clients["cloudwatch"].puts[0]["MetricData"][0]["Value"] == 1800.0
+    assert "lead_time_basis=merge" in caplog.text
+
+
+def test_no_lead_time_is_emitted_when_neither_timestamp_exists(clients, monkeypatch):
+    monkeypatch.setitem(h._CLIENTS, "codepipeline", FakeCodePipeline())
+
+    h.handler(_pipeline_event("SUCCEEDED"), None)
+
+    assert clients["cloudwatch"].puts == []
+
+
+def test_the_infra_pipeline_succeeding_produces_no_lead_time(clients, monkeypatch):
+    # Lead time is commit-to-PRODUCTION. The infra pipeline deploys layers, not
+    # the application, and counting it would measure a different thing under the
+    # same name. Plan D6.
+    monkeypatch.setitem(h._CLIENTS, "codepipeline", FakeCodePipeline())
+
+    result = h.handler(_pipeline_event("SUCCEEDED", pipeline="bgd-us-east-1-infra-pipeline"), None)
+
+    assert result["handled"] is False
+    assert clients["cloudwatch"].puts == []
