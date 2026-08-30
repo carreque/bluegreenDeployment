@@ -94,6 +94,7 @@ The environment still appears on every resource as a **tag** (§5), which is wha
 | CodeBuild project | `bgd-us-east-1-<purpose>-build` | `bgd-us-east-1-app-build` |
 | CloudWatch log group | `/bgd/us-east-1/<env>/<service>` | `/bgd/us-east-1/prod/api` |
 | CloudWatch alarm | `bgd-us-east-1-<env>-<metric>` | `bgd-us-east-1-prod-5xx-rate` |
+| SSM parameter | `/bgd/<env>/<key>` | `/bgd/prod/image_tag` |
 
 ### The deliberate deviations
 
@@ -117,6 +118,34 @@ The environment still appears on every resource as a **tag** (§5), which is wha
 > The **function name** still follows §1 exactly, which is where the convention
 > earns its keep. Only the prefix Lambda owns is left alone. See
 > `infra/modules/lambda/main.tf`.
+
+> **Amended in Phase 7 (2026-08-29).** There are now **three**.
+>
+> **SSM parameters use slashes, and they carry the environment where the log
+> groups carry it too** — `/bgd/prod/image_tag`, not
+> `bgd-us-east-1-prod-image-tag`.
+>
+> This is the log group argument applied to a different service, and it is the
+> stronger case of the two. Parameter Store is hierarchical by design rather
+> than by console convention: `GetParametersByPath` walks the tree, the console
+> renders it as folders, and an IAM policy scopes access with
+> `arn:aws:ssm:…:parameter/bgd/prod/*`. A hyphenated flat name would give up all
+> three and gain nothing but a row that looks like the others.
+>
+> The region is omitted deliberately, unlike in the log group pattern. A
+> parameter ARN already contains its region, and a parameter is not addressable
+> from another one — so the segment would be noise in a path that four different
+> tools have to match against.
+>
+> The two parameters are `/bgd/staging/image_tag` and `/bgd/prod/image_tag`. See
+> `infra/foundation/ssm.tf` and the Phase 7 plan's D8.
+>
+> §2's rule is what puts no `<env>` segment in `bgd-us-east-1-infra-pipeline`,
+> `bgd-us-east-1-infra-plan-build` or `bgd-us-east-1-infra-apply-role`: the
+> pipeline deploys all four layers and exists once for the whole project, so
+> there is nothing to disambiguate. **Confirmed rather than assumed**, because
+> the alternative reading — one pipeline per environment — is a shape this
+> project deliberately does not have.
 
 ---
 
