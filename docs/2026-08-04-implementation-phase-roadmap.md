@@ -778,6 +778,17 @@ Only images flow through this pipeline. Task definition and service shape stay o
 > branch used. **No amendment needed there** — recorded explicitly, as Phases
 > 3, 5, 6, 7 and 8 did, so the absence reads as checked rather than
 > overlooked.
+>
+> **Eleven decisions were taken during execution rather than before it**, and
+> they are recorded in [the local verification
+> record](./phases/phase9/2026-08-30-local-verification.md)'s §9, each with
+> what it costs if it turns out to be wrong. Six of the eleven were forced by a
+> defect in this project's own documents rather than by anything an
+> implementer did — including a matcher this roadmap's own plan specified that
+> could not pass the plan's own test (§9.3), and a runbook step that would have
+> tested nothing (§9.6). That ratio is the honest headline of the phase, and it
+> is recorded where a reader looking for what went wrong will find it rather
+> than only in the commit that fixed it.
 
 ### Phase 10 — Teardown and rebuild automation
 

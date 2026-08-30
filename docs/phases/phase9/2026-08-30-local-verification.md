@@ -542,3 +542,209 @@ Runbook step 8 also gained one line: while reading the collector's log for
 event names and `lead_time_basis`, also confirm no `Publish` error appears —
 turning CRITICAL 1's class of failure into one the runbook would catch even if
 a future edit reintroduces a non-ASCII subject.
+
+---
+
+## 9. Decisions taken during execution
+
+The plan's §0.1 records the eighteen decisions taken *before* implementation
+began. This section records the eleven taken *during* it — points where the
+plan was silent, wrong, or contradicted by what the code turned out to say,
+and a decision had to be made to keep going.
+
+Each is written the way it was made: what was decided, why, and **what it
+costs if it turns out to be wrong.** That last part is the reason this section
+exists. A decision recorded without its downside is an assertion; recorded
+with one, it is something a later reader can weigh and reverse.
+
+Six of the eleven were forced by a defect in this project's own documents
+rather than by anything an implementer did. That ratio is the honest headline
+of this phase.
+
+### 9.1 `foundation` declares the `archive` provider, and commits its lock entry
+
+**Not in the plan's file list for Task 6.** This layer had never used the
+`archive` provider; `infra/modules/lambda` requires it for `data.archive_file`.
+Terraform would install it implicitly from the child module — but
+`infra/environments/prod/versions.tf` declares it explicitly at the root with a
+comment saying why, and an implicit dependency here would leave this layer's
+`.terraform.lock.hcl` changed-but-uncommitted, so the next `terraform init`
+inside CodeBuild resolves a provider no lock file pinned.
+
+Verified against both lock files before ruling: prod's carried
+`hashicorp/archive`, foundation's did not.
+
+**Cost if wrong:** one provider declaration and one lock entry that were not
+strictly needed.
+
+### 9.2 The caplog assertions stand; the fallback is stated rather than taken
+
+Two tests assert on an `INFO`-level log line. That works only because
+`handler.py` sets the **root** logger to `INFO` — a property of the module
+under test, not of the test. Ruled that if `caplog.text` came back empty the
+fix was `caplog.set_level(logging.INFO)`, never weakening the assertion to
+match a warning.
+
+**Retired during execution.** A reviewer settled it empirically by running the
+one test whose pass depended on the interaction, in isolation. The assertion is
+real, not vacuous, and no `set_level` was needed.
+
+**Cost if wrong:** one line added to two tests.
+
+### 9.3 The plan's rollback matcher was wrong, and the first fix was worse
+
+**The most consequential ruling of the phase, and the plan's own defect.**
+
+The plan specified `"rollback" in reason.lower()` while its own test passed
+`reason="rolling back to revision 4"` — a string that substring does not
+match. The brief could not pass the test the brief supplied.
+
+The implementer noticed and patched it to match `"back"`. That is broader in a
+dangerous direction: `backend unhealthy`, `exponential backoff` and
+`fallback target` all contain it, so an ordinary deployment failure would have
+been filed as a rollback — removed from the change-failure-rate numerator that
+D8 exists to protect, and described to the operator by the wrong email.
+
+Ruled: `ROLLBACK_REASON_PHRASES = ("rollback", "rolling back", "rolled back")`,
+matched with `any()`, plus a regression test that fails under the rejected
+matcher. The plan document was corrected in the same breath so the record
+matches the code.
+
+**The preflight conflict scan run before execution should have caught this and
+did not.** It verified that the rollback-before-failed *ordering* matched the
+test asserting it, and never checked whether the substring matched the string.
+The scan's row for that task reads "clean" and it was not. Recorded here
+because a scan that misses something and says nothing is worse than no scan.
+
+**Cost if wrong:** a rollback whose `reason` uses a fourth phrasing is counted
+as a plain failure — visible on the dashboard as a `DeploymentFailed` with no
+`DeploymentRolledBack` beside it, and one line to fix. That is the safe
+direction: it under-reports rollbacks rather than inventing them.
+
+### 9.4 The two inert checkov directives become ordinary comments
+
+Ruled once the evidence arrived (§3.4) and acted on in the pre-merge wave
+(§8). The reasoning texts are worth keeping — *"PutMetricData accepts no
+resource ARN, so `*` is the only value it takes, and the namespace `Condition`
+is the real control"* is exactly what stops a future reader trying to narrow
+it. But dressing that reasoning as a suppression is a small untruth, and a
+misleading one: if checkov ever adds a rule that *does* fire on a wildcard
+`Resource` there, a reader seeing an existing skip would assume the case had
+been considered.
+
+Sharpened by a second measurement: removing **both** directives moved only
+**one** check from skipped to passed (488/110 → 489/109), because both sit
+inside a single `aws_iam_role_policy` and checkov evaluates that check per
+*resource*, not per *statement*. The second directive suppressed nothing even
+in principle.
+
+**Cost if wrong:** two comments read as prose rather than as directives, which
+is what they already were in effect.
+
+### 9.5 Two out-of-brief edits accepted in Task 10
+
+The implementer deleted the dead `local.release_dimensions` from
+`dashboard.tf` — the brief permitted touching that file only for a *checkov*
+finding, and this was a *tflint* one (`terraform_unused_declarations`) — and
+fixed `app_pipeline_shape.tftest.hcl`, a second file duplicating the trigger
+assertion that the brief's file list missed.
+
+Both were required for the gate to pass at all, and neither weakens an
+assertion. The first closes a minor deferred from the previous task rather
+than carrying it forward.
+
+**Cost if wrong:** nil. Both are visible in the diff and were reviewed.
+
+### 9.6 The runbook's step 5 could not have worked
+
+**The plan's defect again, caught by an implementer rather than by review.**
+
+Step 5 was specified as provoking a pipeline failure with `APP_SCOPE=bogus`.
+Verified against the code: the Prod stage's `before_entry` regex is
+`^(staging|all)$`, which `bogus` does not match, so the stage **skips** and
+`scripts/pipeline-deploy.sh` — whose line 160 would `die` on an unrecognised
+scope — never runs. The execution finishes green and no email is sent.
+
+An operator following that step would have concluded the alert path was broken
+when it was fine. Ruled: step 5 becomes **declining the production approval**,
+a genuine `Failed` execution that exercises the real path.
+
+Checked before ruling that this does not distort the phase's headline metric:
+a declined approval emits `PipelineFailed` (dimension `PipelineName`), while
+change failure rate is computed from `DeploymentFailed`/`DeploymentSucceeded`
+(`dashboard.tf`). Different metric pair.
+
+The `APP_SCOPE` case survives as its own step, **reframed from a test that must
+pass into a finding to record** — whether an unrecognised scope skips silently
+or fails loudly is an unverified claim of Phase 8's D3, and this runbook is the
+first thing that can settle it. Recording the answer is worth a step; *relying*
+on it, as the plan did, was the mistake.
+
+**Cost if wrong:** one declined approval and a `PipelineFailed` datapoint
+describing a deliberate test rather than a real failure — visible in the log,
+harmless to every other metric.
+
+### 9.7 The em dash, and its counterpart in the plan
+
+§8 covers the fix. The decision recorded here is that this was treated as
+**Critical rather than cosmetic**, on the strength of a verified consequence
+chain rather than the character itself: in `_handle_ecs`'s FAILED branch `_put`
+runs *before* `_alert`, so a raising `Publish` means EventBridge retries twice
+and `DeploymentFailed` is written **three times** for one failure — inflating
+change failure rate threefold — while the only mail that arrives is the
+watchdog saying the collector raised.
+
+The plan's D3 carried the same em dash in its sample subject, and the runbook
+told the operator to expect it. Both corrected.
+
+**Cost if wrong:** an ASCII hyphen instead of an em dash in three subject lines.
+
+### 9.8 Lead time is gated on the resolved scope, and absent means `all`
+
+Plan D6's premise — *"that pipeline reaching `SUCCEEDED` is exactly the moment
+the change is live in production"* — is false as of Phase 8, verified at
+`codepipeline-app.tf:238` and `:326`, where both stage conditions carry
+`result = "SKIP"`.
+
+The direction of the fix matters more than the fix. An absent `APP_SCOPE` — the
+git-triggered run, which takes the pipeline's own default — is treated as
+`all`. Getting that backwards would silently suppress lead time for **every
+merge-triggered production deployment**, which is the main case, the opposite
+of the bug being fixed, and indistinguishable from it on the dashboard: an
+empty widget either way.
+
+**Cost if wrong:** lead time is emitted for fewer runs than it could be, and
+the log line says which scope it saw and why it declined.
+
+### 9.9 MTTR queries at a five-minute period
+
+CloudWatch retains 1-minute datapoints for 15 days and 5-minute datapoints for
+63. The query used a 30-day window at a 60-second period, so it could not see
+past half its own window — while `variables.tf` claimed the opposite as the
+*reason* for the value.
+
+**Cost if wrong:** a recovery is rounded to a five-minute bucket, which is
+immaterial at the multi-day scale this metric measures.
+
+### 9.10 Every accepted rollback phrase is now pinned by a test
+
+Two of the three phrases were unexercised, not one. Deleting either passed all
+37 tests, and line coverage could not see it — the `any(...)` generator line is
+covered regardless of which phrases the tuple holds.
+
+Fixed rather than deferred, and the reason is this module's own history: a
+matcher that six passing tests failed to catch (§3.1). The correct response to
+that is a suite that pins each accepted phrase, not one that pins one of three.
+
+**Cost if wrong:** five lines of parametrized test.
+
+### 9.11 The D7/D8 interaction is recorded, not fixed
+
+Covered in §8. The decision recorded here is the *restraint*: a blind fix at
+the end of a branch, to an interaction nobody had noticed until the final
+review, would have been a guess dressed as a correction. Phase 11 produces the
+real rollback data that settles it.
+
+**Cost if wrong:** `RecoveryTimeSeconds` stays empty and Phase 11 notices —
+which is the same outcome as fixing it wrongly now, but with evidence attached
+instead of a guess.
