@@ -24,17 +24,12 @@ layer="${2:-}"
 [[ -n "$command" && -n "$layer" ]] || die "usage: tf.sh <command> <layer> [args...]"
 shift 2
 
-# Mapped inline rather than through a helper called in "$(...)". The original
-# draft used a helper and lost its own error message: lib/common.sh's die() then
-# wrote to stdout, so the message was captured into the variable being assigned
-# and the script exited 1 in silence. die() now writes to stderr, so the shape
-# would work — but an inline case is still the simpler thing, and it does not
-# depend on that fix holding.
-case "$layer" in
-  bootstrap | foundation | network) dir="$ROOT/infra/$layer" ;;
-  staging | prod) dir="$ROOT/infra/environments/$layer" ;;
-  *) die "unknown layer: $layer (expected bootstrap, foundation, network, staging or prod)" ;;
-esac
+# The map moved to lib/common.sh in Phase 10, when rebuild.sh would have been
+# the fourth copy. The original comment here recorded why it was inline rather
+# than in a helper — die() wrote to stdout, so a failure inside "$(...)" was
+# captured instead of shown. die() writes to stderr now, which is what makes
+# the shared helper safe to call this way.
+dir="$(layer_dir "$layer")"
 
 [[ -d "$dir" ]] || die "layer '$layer' has no directory yet: ${dir#"$ROOT"/}"
 

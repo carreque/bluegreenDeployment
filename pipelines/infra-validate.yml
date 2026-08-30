@@ -17,6 +17,12 @@ phases:
       # Ordered cheapest-first so a formatting mistake fails in seconds rather
       # than after the container pulls. tf-lint is last because it is the only
       # step that pulls two images.
+      #
+      # test-scripts is first and is the cheapest of all: pure bash, no
+      # container, no Terraform, under a second. It also has the strongest claim
+      # to being here — the scripts it tests are the scripts this stage runs.
+      # Phase 10 §D14.
+      - make test-scripts
       - make tf-fmt-check
       - make tf-validate
       - make tf-test

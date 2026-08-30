@@ -104,3 +104,11 @@ single dependency graph. The symptom would be this layer's plan failing to
 read a state file `make teardown` emptied, in the layer whose whole purpose is
 surviving teardown. What `prod` owns instead is four lines: `alarm_actions` on
 its own bake alarms, which can only be set where the alarm is.
+
+## Phase 10 — the platform marker
+
+- **`/bgd/platform/deployed_scope`** — how deep the platform is currently
+  applied. Written by `make teardown` and `make rebuild`; read by both pipeline
+  drivers, which clamp their own scope to it so that a merge to `main` while the
+  platform is torn down skips the layers that do not exist rather than
+  recreating them. It lives here because it has to survive what it describes.

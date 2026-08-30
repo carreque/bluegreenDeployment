@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# A stand-in for the AWS CLI, put on PATH by the shell suite so the marker,
+# clamp and precondition paths can be exercised on a machine with no AWS
+# session at all. Plan §D12.
+#
+# Driven entirely by environment variables the test sets:
+#
+#   FAKE_SSM_DEPLOYED_SCOPE   value returned for /bgd/platform/deployed_scope.
+#                             Empty makes get-parameter FAIL, which is what a
+#                             missing parameter does.
+#   FAKE_SSM_IMAGE_TAG        value returned for any /bgd/<env>/image_tag.
+#                             Empty makes get-parameter fail.
+#   FAKE_ACCOUNT_ID           value returned by sts get-caller-identity.
+#   FAKE_S3_MISSING=1         makes every s3api head-* call fail.
+#   FAKE_ECR_MISSING=1        makes ecr describe-images fail, as an absent tag
+#                             does.
+#   FAKE_AWS_LOG              file every invocation is appended to, so a test
+#                             can assert on call ORDER — which is how the
+#                             marker-before-destroy rule is checked.
+#
+# Any subcommand not stubbed below exits 90 with a loud message. That is
+# deliberate: a fake that returns empty success for unknown calls lets a test
+# pass by reaching an unstubbed path, which is the one thing a fake must never
+# do.
+
+set -uo pipefail
+
+if [[ -n "${FAKE_AWS_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$FAKE_AWS_LOG"
+fi
+
+# The CLI accepts its arguments in any order, so the stub scans for what it
+# needs rather than assuming positions.
+name=""
+prev=""
+for arg in "$@"; do
+  [[ "$prev" == "--name" ]] && name="$arg"
+  prev="$arg"
+done
+
+case "$1 ${2:-}" in
+  "ssm get-parameter")
+    case "$name" in
+      /bgd/platform/deployed_scope)
+        [[ -n "${FAKE_SSM_DEPLOYED_SCOPE:-}" ]] || {
+          printf 'ParameterNotFound\n' >&2
+          exit 255
+        }
+        printf '%s\n' "$FAKE_SSM_DEPLOYED_SCOPE"
+        ;;
+      /bgd/*/image_tag)
+        [[ -n "${FAKE_SSM_IMAGE_TAG:-}" ]] || {
+          printf 'ParameterNotFound\n' >&2
+          exit 255
+        }
+        printf '%s\n' "$FAKE_SSM_IMAGE_TAG"
+        ;;
+      *)
+        printf 'fake aws: no stub for parameter %s\n' "$name" >&2
+        exit 90
+        ;;
+    esac
+    ;;
+
+  "ssm put-parameter")
+    # Silent success, like the real thing with --overwrite. The assertion a
+    # test makes about a write is on FAKE_AWS_LOG, not on this output.
+    ;;
+
+  "sts get-caller-identity")
+    printf '%s\n' "${FAKE_ACCOUNT_ID:-590184028094}"
+    ;;
+
+  "s3api head-bucket" | "s3api head-object")
+    [[ -z "${FAKE_S3_MISSING:-}" ]] || {
+      printf 'Not Found\n' >&2
+      exit 254
+    }
+    ;;
+
+  "ecr describe-images")
+    [[ -z "${FAKE_ECR_MISSING:-}" ]] || {
+      printf 'ImageNotFoundException\n' >&2
+      exit 254
+    }
+    ;;
+
+  *)
+    printf 'fake aws: no stub for `%s` — add one rather than letting the test pass on an unstubbed call\n' "$*" >&2
+    exit 90
+    ;;
+esac

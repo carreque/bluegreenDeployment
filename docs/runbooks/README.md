@@ -15,7 +15,7 @@ Planned, in the order they are needed:
 | [The infra pipeline apply, both exit criteria, and repairing a broken pipeline definition by local apply](./phase-07-infra-pipeline.md) | 7 |
 | [The app pipeline apply, the exit criterion, and both narrow-scope runs](./phase-08-app-pipeline.md) | 8 |
 | [The observability plane apply, a deliberate pipeline failure, and the dashboard's first real data](./phase-09-observability.md) | 9 |
-| Teardown and rebuild — what survives, what does not, how long it takes | 10 |
+| [Teardown, the idle check, and the rebuild — what survives, what does not, how long it takes](./phase-10-teardown-and-rebuild.md) | 10 |
 | The three rollback demonstrations | 11 |
 
 From Phase 7 the infra pipeline applies `infra/`, and **merging to `main` is
@@ -29,9 +29,16 @@ From Phase 8 the same is true of `app/`, with **one** approval rather than
 four — the compensating controls there are Phase 6's dark canary hook and bake
 alarms, not more gates. Both pipelines live in `infra/foundation`, so both have
 the repair caveat above, and **both survive a teardown**: after `make teardown`
-they are still armed, and a merge to `main` will fire one against an account
-that no longer has a network. The Phase 8 runbook's last section says what to do
-about that.
+they are still armed.
+
+From Phase 10 that is safe rather than a hazard. `make teardown` lowers
+`/bgd/platform/deployed_scope`, and both pipeline drivers clamp their own scope
+to it, so a merge to `main` while the platform is down validates, applies
+`foundation`, builds and pushes an image, and **skips every stage whose layer no
+longer exists** — green, creating nothing, and not counted as a failed
+deployment. There is nothing to disable and nothing to re-enable; `make rebuild`
+raises the marker again as its last act on each layer. The corollary is
+deliberate and worth knowing: a merge can no longer rebuild a torn-down layer.
 
 Phase 9 adds the observability plane — one collector Lambda, two EventBridge
 rules, a dashboard, and `alarm_actions` on Phase 6's four bake alarms — in the

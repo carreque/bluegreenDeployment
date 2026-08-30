@@ -25,11 +25,16 @@ PLUGINS="$INFRA/.tflint.d"
 # names — bootstrap, foundation, network, staging, prod — while the discovery
 # branch below already yields relative paths, so both forms must work.
 #
-# staging and prod live one level deeper, at infra/environments/<layer>. This is
-# the same mapping scripts/tf.sh and scripts/teardown.sh each carry, and its
+# staging and prod live one level deeper, at infra/environments/<layer>. Its
 # absence here was invisible until Phase 5 put a layer below infra/ for the first
 # time: tflint failed with "chdir staging: no such file or directory" the moment
 # staging entered TF_LAYERS. checkov was never affected — it scans infra/ whole.
+#
+# Phase 10 moved that shared map into lib/common.sh as layer_dir(), and this
+# function is deliberately NOT it: layer_dir returns an ABSOLUTE path, while
+# docker's -w needs one relative to infra/ — and this has to pass an
+# already-relative path through unchanged, because the discovery branch below
+# yields those. Plan §D13 and §F6.
 layer_path() {
   case "$1" in
     staging | prod) echo "environments/$1" ;;

@@ -83,6 +83,11 @@ output "image_tag_parameter_names" {
   value       = { for env, p in aws_ssm_parameter.image_tag : env => p.name }
 }
 
+output "deployed_scope_parameter_name" {
+  description = "SSM parameter holding how deep the platform is currently applied. Written by scripts/teardown.sh and scripts/rebuild.sh; read by both pipeline drivers. Phase 10's runbook reads it through here rather than typing the path again."
+  value       = aws_ssm_parameter.deployed_scope.name
+}
+
 # ---------------------------------------------------------------------------
 # Phase 8 - the application pipeline
 # ---------------------------------------------------------------------------

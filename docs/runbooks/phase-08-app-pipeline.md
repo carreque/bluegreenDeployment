@@ -531,9 +531,14 @@ Nothing here changes the teardown story. `make teardown` destroys prod, staging
 and network; `foundation` survives, so **both pipelines survive a teardown** —
 along with the artifact bucket and every SBOM in it.
 
-One consequence worth knowing before you walk away: the pipelines stay armed.
-A merge to `main` after a teardown will fire, and the application pipeline's
-staging deploy will attempt to recreate the environment layers against a
-network that no longer exists. If the account is being left torn down for more
-than a day, either stop merging to `main` or disable both triggers in the
-console — and re-enable them as the first step of the Phase 10 rebuild.
+One consequence worth knowing before you walk away: the pipelines stay armed —
+and since Phase 10 that is safe. `make teardown` lowers
+`/bgd/platform/deployed_scope`, and both pipeline drivers clamp their own scope
+to it, so a merge to `main` after a teardown validates, applies `foundation`,
+builds and pushes an image, and skips every stage whose layer no longer exists.
+The run finishes green, creates nothing, and Phase 9's change-failure-rate
+correctly does not count it.
+
+There is nothing to disable and nothing to re-enable. `make rebuild` raises the
+marker again as its last act on each layer; see [the Phase 10
+runbook](./phase-10-teardown-and-rebuild.md).

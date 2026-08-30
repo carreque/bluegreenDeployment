@@ -22,6 +22,10 @@ longer than three lines, or needing a conditional or a loop, lives here.
 | `push-image.sh` | 8 — the skopeo push and the digest assertion, factored out of `seed-ecr.sh` |
 | `pipeline-app-build.sh` | 8 — the app pipeline's Build stage: test, image, SBOM, push, publish |
 | `pipeline-deploy.sh` | 8 — the app pipeline's deploy driver, scope gate and the SSM record |
+| `teardown.sh` | 3, hardened in 10 — the ordered destroy, the typed confirmation and the marker |
+| `verify-idle.sh` | 10 — the direct AWS checks that prove nothing billable survived |
+| `rebuild.sh` | 10 — the ordered apply, the six preconditions and both smoke runs |
+| `tests/` | 10 — the shell suite; `make test-scripts`, needs bash and nothing else |
 
 `push-image.sh` is `seed-ecr.sh` without the two SSM writes. The split exists
 because the application pipeline's build needs the push and must **not** record
@@ -61,11 +65,36 @@ SHA and both timestamps for a build. It is shared rather than duplicated because
 applied the `-dirty` suffix and the other did not, the repeatability check would
 be proving a property of an image nobody ships.
 
-The split exists because of Phase 10. `make teardown` destroys `prod` → `staging`
-→ `network` in order, with confirmation prompts, error handling for a layer that
-fails mid-destroy, and waits on ECS draining. That is real shell, and macOS's GNU
-Make 3.81 has no `.ONESHELL`, so every recipe line would otherwise run in its own
-subshell.
+Phase 10 adds the operator pair and the check between them:
+
+| Script | What it is for |
+|---|---|
+| `teardown.sh` | Destroy prod, staging and network in order. `SCOPE` stops it earlier. Lowers `/bgd/platform/deployed_scope` **before** the first destroy. |
+| `verify-idle.sh` | Prove nothing billable survived, without reading a state file. |
+| `rebuild.sh` | Apply the way back and smoke both environments. The only thing that raises the marker. |
+| `tests/` | The shell suite. `make test-scripts`; needs bash and nothing else. |
+
+`foundation` and `bootstrap` are unreachable from all three: there is no `SCOPE`
+value and no flag that names them.
+
+Three scripts rather than one with three modes, because they answer three
+different questions asked at three different times — *stop paying*, *is it
+really stopped*, *start again* — and the middle one is the one you run alone,
+the morning after, when the other two are not what you want.
+
+That is also the reason the makefile's three-line rule exists at all. Each of
+these is real shell — ordered loops, a typed confirmation, six preconditions,
+timing tables — and macOS's GNU Make 3.81 has no `.ONESHELL`, so every recipe
+line would otherwise run in its own subshell.
+
+`tests/` is the first suite in this repository that tests shell. It is
+deliberately not `bats`: a harness that has to be installed is a harness the
+offline gate cannot depend on, and `make test-scripts` must run on a laptop that
+has bash and nothing else and in CodeBuild with no install step. The scripts
+under test reach AWS only through `tests/fake-bin/aws`, which answers from
+environment variables and **exits 90 on any unstubbed subcommand** — a fake that
+returned empty success for unknown calls would let a test pass by reaching a
+path nobody wrote.
 
 `lint-infra.sh` and `seed-ecr.sh` follow `generate-sbom.sh` in running their
 tools from **digest-pinned containers** rather than host installs. Nothing to

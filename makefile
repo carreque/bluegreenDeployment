@@ -243,8 +243,11 @@ seed-ecr: ## Push the built image into ECR (needs an AWS session)
 # Phase 4 — network
 # ---------------------------------------------------------------------------
 
+# SCOPE names where the run stops: prod destroys prod only, staging destroys
+# prod and staging, network (the default) destroys all three. foundation and
+# bootstrap are never reachable — see the plan's D16.
 .PHONY: teardown
-teardown: ## Destroy prod, then staging, then network (needs an AWS session)
+teardown: ## Destroy prod, staging and network; SCOPE=prod|staging|network (needs an AWS session)
 	@./scripts/teardown.sh
 
 .PHONY: verify-network
@@ -280,6 +283,32 @@ test-lambdas: deps ## Run the Lambda handler suite
 	@cd $(LAMBDA_DIR) && $(PY) -m pytest
 
 # ---------------------------------------------------------------------------
+# Phase 10 — teardown and rebuild
+# ---------------------------------------------------------------------------
+
+# The shell suite. Pure bash: no virtualenv, no Terraform, no AWS session, and
+# no installed test framework — the scripts reach AWS only through the fake CLI
+# in scripts/tests/fake-bin. See the plan's D12.
+.PHONY: test-scripts
+test-scripts: ## Run the shell suite for scripts/ (no AWS session needed)
+	@./scripts/tests/run.sh
+
+# Deliberately separate from teardown, and re-runnable. Folded in, "the destroy
+# failed" and "the destroy succeeded but something survived" would be the same
+# red exit from the same command — and there would be no way to check an account
+# nobody tore down today. Plan §D9.
+.PHONY: verify-idle
+verify-idle: ## Prove nothing billable survives; SCOPE=prod|staging|network (needs an AWS session)
+	@./scripts/verify-idle.sh
+
+# The way back. Reads image_tag from SSM rather than terraform.tfvars, which is
+# the difference between restoring what was deployed and deploying whatever
+# happens to be in a gitignored file. Plan §D10.
+.PHONY: rebuild
+rebuild: ## Apply network, staging and prod, then smoke both; SCOPE=network|staging|prod (needs an AWS session)
+	@./scripts/rebuild.sh
+
+# ---------------------------------------------------------------------------
 # Phase 8 — application pipeline
 # ---------------------------------------------------------------------------
 
@@ -292,4 +321,3 @@ test-lambdas: deps ## Run the Lambda handler suite
 push-image: ## Push the built image into ECR without recording it as deployed (needs an AWS session)
 	@./scripts/push-image.sh
 
-# PLANNED: rebuild        Apply network then staging then prod (Phase 10)
