@@ -82,9 +82,105 @@ def _environment() -> str:
     return os.environ.get("BGD_ENVIRONMENT", DEFAULT_ENVIRONMENT)
 
 
+def _put(metric_name: str, value: float, unit: str, dimensions: dict[str, str]) -> None:
+    """One datapoint. Raises if CloudWatch refuses — see the module docstring."""
+    _client("cloudwatch").put_metric_data(
+        Namespace=_namespace(),
+        MetricData=[
+            {
+                "MetricName": metric_name,
+                "Value": value,
+                "Unit": unit,
+                # Sorted so two invocations with the same dimensions produce the
+                # same list. CloudWatch treats dimension sets as unordered, but
+                # a stable order makes the log line and the test comparable.
+                "Dimensions": [
+                    {"Name": name, "Value": val} for name, val in sorted(dimensions.items())
+                ],
+            }
+        ],
+    )
+    LOGGER.info("metric %s=%s %s %s", metric_name, value, unit, dimensions)
+
+
+def _alert(subject: str, message: str) -> None:
+    topic_arn = os.environ.get("BGD_ALERT_TOPIC_ARN")
+    if not topic_arn:
+        LOGGER.error("BGD_ALERT_TOPIC_ARN is not set; this alert is lost: %s", subject)
+        return
+
+    # Subject is capped at 100 characters by SNS and a longer one is rejected
+    # outright, which would turn a deployment failure into a collector failure.
+    _client("sns").publish(TopicArn=topic_arn, Subject=subject[:100], Message=message)
+    LOGGER.info("alert published subject=%s", subject)
+
+
+def _service_name(event: dict) -> str:
+    """The service the event is about, from the resource ARN's last segment."""
+    resources = event.get("resources") or []
+    return resources[0].rsplit("/", 1)[-1] if resources else "unknown"
+
+
+def _deployment_console_url(event: dict) -> str:
+    region = event.get("region", "us-east-1")
+    resources = event.get("resources") or []
+    if not resources:
+        return ""
+    cluster, service = resources[0].split("/")[-2:]
+    return (
+        f"https://{region}.console.aws.amazon.com/ecs/v2/clusters/{cluster}"
+        f"/services/{service}/deployments?region={region}"
+    )
+
+
 def _handle_ecs(event: dict) -> dict[str, object]:
-    LOGGER.info("ecs event received; Task 2 implements the outcomes")
-    return {"handled": False}
+    """One ECS deployment event to at most one outcome metric.
+
+    Checked in this order — rollback, failed, succeeded — because a rollback
+    event may also be shaped like a failure and each event must yield exactly
+    one outcome. Plan D8.
+    """
+    detail = event.get("detail") or {}
+    event_name = (detail.get("eventName") or "").upper()
+    reason = detail.get("reason") or ""
+    service = _service_name(event)
+    dimensions = {"Environment": _environment()}
+
+    if "ROLLBACK" in event_name or "back" in reason.lower():
+        _put(METRIC_DEPLOYMENT_ROLLED_BACK, 1, "Count", dimensions)
+        _alert(
+            f"[bgd] Production deployment ROLLED BACK — {service}",
+            f"ECS rolled production back.\n\nevent: {event_name}\nreason: {reason}\n"
+            f"deployment: {detail.get('deploymentId', 'unknown')}\n\n"
+            f"{_deployment_console_url(event)}\n",
+        )
+        return {"handled": True, "outcome": "rolled_back"}
+
+    if event_name in FAILED_EVENTS:
+        _put(METRIC_DEPLOYMENT_FAILED, 1, "Count", dimensions)
+        _alert(
+            f"[bgd] Production deployment FAILED — {service}",
+            f"A production deployment failed.\n\nevent: {event_name}\nreason: {reason}\n"
+            f"deployment: {detail.get('deploymentId', 'unknown')}\n\n"
+            f"{_deployment_console_url(event)}\n",
+        )
+        return {"handled": True, "outcome": "failed"}
+
+    if event_name in SUCCEEDED_EVENTS:
+        # Before the success is written, and the order is load-bearing. Plan D7.
+        _emit_recovery_time(_now(), dimensions)
+        _put(METRIC_DEPLOYMENT_SUCCEEDED, 1, "Count", dimensions)
+        return {"handled": True, "outcome": "succeeded"}
+
+    LOGGER.info("ignoring ECS eventName=%s", event_name or "<absent>")
+    return {"handled": False, "eventName": event_name}
+
+
+def _emit_recovery_time(now: datetime, dimensions: dict[str, str]) -> None:
+    # Task 4. Deliberately a no-op rather than absent: _handle_ecs already calls
+    # it at the one point in the sequence where it has to run (plan D7), so the
+    # ordering is established by the task that can be tested for it.
+    return None
 
 
 def _handle_codepipeline(event: dict) -> dict[str, object]:

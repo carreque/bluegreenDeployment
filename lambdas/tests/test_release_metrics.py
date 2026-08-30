@@ -77,3 +77,83 @@ def test_the_ecs_source_routes_to_the_deployment_handler(clients):
     # does not filter event names (D4). It must cost nothing but a log line.
     assert result["handled"] is False
     assert clients["cloudwatch"].puts == []
+
+
+ECS_EVENT = {
+    "source": "aws.ecs",
+    "region": "us-east-1",
+    "resources": [
+        "arn:aws:ecs:us-east-1:590184028094:service/"
+        "bgd-us-east-1-prod-cluster/bgd-us-east-1-prod-api"
+    ],
+    "detail": {"eventName": "SERVICE_DEPLOYMENT_COMPLETED", "deploymentId": "ecs-svc/123"},
+}
+
+
+def _ecs(event_name, reason=None):
+    detail = dict(ECS_EVENT["detail"], eventName=event_name)
+    if reason is not None:
+        detail["reason"] = reason
+    return dict(ECS_EVENT, detail=detail)
+
+
+def _metric_names(fake):
+    return [put["MetricData"][0]["MetricName"] for put in fake.puts]
+
+
+def test_a_completed_deployment_is_counted_and_sends_no_email(clients):
+    result = h.handler(_ecs("SERVICE_DEPLOYMENT_COMPLETED"), None)
+
+    assert result["outcome"] == "succeeded"
+    assert h.METRIC_DEPLOYMENT_SUCCEEDED in _metric_names(clients["cloudwatch"])
+    # D16: success is not an alert.
+    assert clients["sns"].published == []
+
+
+def test_a_failed_deployment_is_counted_and_emails(clients):
+    result = h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED", reason="tasks failed to start"), None)
+
+    assert result["outcome"] == "failed"
+    assert _metric_names(clients["cloudwatch"]) == [h.METRIC_DEPLOYMENT_FAILED]
+
+    published = clients["sns"].published[0]
+    assert "FAILED" in published["Subject"]
+    assert "bgd-us-east-1-prod-api" in published["Message"]
+    assert "tasks failed to start" in published["Message"]
+
+
+def test_a_rollback_is_counted_once_and_never_also_as_a_failure(clients):
+    # D8. If ECS emits both a rollback event and a FAILED event for the same
+    # deployment — likely, and unconfirmable offline — emitting both here would
+    # double the change-failure-rate numerator. Each event yields one outcome.
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED", reason="rolling back to revision 4"), None)
+
+    assert _metric_names(clients["cloudwatch"]) == [h.METRIC_DEPLOYMENT_ROLLED_BACK]
+    assert h.METRIC_DEPLOYMENT_FAILED not in _metric_names(clients["cloudwatch"])
+
+
+def test_a_rollback_is_detected_from_the_event_name_too(clients):
+    # The reason string is free text and may not mention it; the event name may.
+    # Either is enough, because missing a rollback is the failure this phase's
+    # whole rollback story rests on.
+    h.handler(_ecs("SERVICE_DEPLOYMENT_ROLLBACK_IN_PROGRESS"), None)
+
+    assert _metric_names(clients["cloudwatch"]) == [h.METRIC_DEPLOYMENT_ROLLED_BACK]
+
+
+def test_the_metric_carries_the_environment_dimension(clients):
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED"), None)
+
+    dimensions = clients["cloudwatch"].puts[0]["MetricData"][0]["Dimensions"]
+    assert dimensions == [{"Name": "Environment", "Value": "prod"}]
+
+
+def test_an_alert_without_a_topic_arn_logs_rather_than_raising(clients, monkeypatch, caplog):
+    # D9 again: a missing topic is a misconfiguration, but raising would retry
+    # and alarm, and the alarm's own delivery path is the topic that is missing.
+    monkeypatch.delenv("BGD_ALERT_TOPIC_ARN", raising=False)
+
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED"), None)
+
+    assert clients["sns"].published == []
+    assert "BGD_ALERT_TOPIC_ARN" in caplog.text
