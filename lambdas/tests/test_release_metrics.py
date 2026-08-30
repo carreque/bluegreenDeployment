@@ -259,3 +259,82 @@ def test_the_infra_pipeline_succeeding_produces_no_lead_time(clients, monkeypatc
 
     assert result["handled"] is False
     assert clients["cloudwatch"].puts == []
+
+
+def _series(metric_id, timestamps):
+    return {"Id": metric_id, "Timestamps": list(timestamps), "Values": [1.0] * len(timestamps)}
+
+
+def test_a_success_after_a_failure_emits_recovery_time(clients, monkeypatch):
+    failed_at = datetime(2026, 8, 30, 11, 0, 0, tzinfo=UTC)  # one hour before _now
+    monkeypatch.setattr(
+        h,
+        "_CLIENTS",
+        {
+            "cloudwatch": FakeCloudWatch(
+                {"MetricDataResults": [_series("failed", [failed_at]), _series("succeeded", [])]}
+            ),
+            "sns": FakeSNS(),
+        },
+    )
+
+    h.handler(_ecs("SERVICE_DEPLOYMENT_COMPLETED"), None)
+
+    names = _metric_names(h._CLIENTS["cloudwatch"])
+    assert names == [h.METRIC_RECOVERY_TIME, h.METRIC_DEPLOYMENT_SUCCEEDED]
+    assert h._CLIENTS["cloudwatch"].puts[0]["MetricData"][0]["Value"] == 3600.0
+
+
+def test_the_lookback_runs_before_the_success_is_written(clients, monkeypatch):
+    # Plan D7, and the single most breakable line in this handler. Written after,
+    # the query finds the success just published, concludes it is the newest
+    # datapoint, and every recovery measures zero — a flat MTTR line that looks
+    # like excellent operations.
+    failed_at = datetime(2026, 8, 30, 11, 0, 0, tzinfo=UTC)
+    fake = FakeCloudWatch(
+        {"MetricDataResults": [_series("failed", [failed_at]), _series("succeeded", [])]}
+    )
+    monkeypatch.setattr(h, "_CLIENTS", {"cloudwatch": fake, "sns": FakeSNS()})
+
+    h.handler(_ecs("SERVICE_DEPLOYMENT_COMPLETED"), None)
+
+    assert fake.calls.index("get_metric_data") < fake.calls.index("put_metric_data")
+
+
+def test_a_success_with_no_prior_failure_emits_no_recovery_time(clients):
+    h.handler(_ecs("SERVICE_DEPLOYMENT_COMPLETED"), None)
+
+    assert _metric_names(clients["cloudwatch"]) == [h.METRIC_DEPLOYMENT_SUCCEEDED]
+
+
+def test_a_second_success_after_the_recovery_emits_nothing_further(clients, monkeypatch):
+    # The failure was already followed by a success, so this one recovers from
+    # nothing. Without this branch every deployment after an outage reports an
+    # ever-growing MTTR.
+    failed_at = datetime(2026, 8, 30, 11, 0, 0, tzinfo=UTC)
+    recovered_at = datetime(2026, 8, 30, 11, 30, 0, tzinfo=UTC)
+    fake = FakeCloudWatch(
+        {
+            "MetricDataResults": [
+                _series("failed", [failed_at]),
+                _series("succeeded", [recovered_at]),
+            ]
+        }
+    )
+    monkeypatch.setattr(h, "_CLIENTS", {"cloudwatch": fake, "sns": FakeSNS()})
+
+    h.handler(_ecs("SERVICE_DEPLOYMENT_COMPLETED"), None)
+
+    assert _metric_names(fake) == [h.METRIC_DEPLOYMENT_SUCCEEDED]
+
+
+def test_the_lookback_window_is_configurable(clients, monkeypatch):
+    monkeypatch.setenv("BGD_MTTR_LOOKBACK_DAYS", "7")
+    fake = FakeCloudWatch()
+    monkeypatch.setattr(h, "_CLIENTS", {"cloudwatch": fake, "sns": FakeSNS()})
+
+    h.handler(_ecs("SERVICE_DEPLOYMENT_COMPLETED"), None)
+
+    window = fake.get_metric_data_kwargs
+    assert (window["EndTime"] - window["StartTime"]).days == 7
+    assert window["ScanBy"] == "TimestampDescending"

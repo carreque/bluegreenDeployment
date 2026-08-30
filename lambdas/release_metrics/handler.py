@@ -23,7 +23,7 @@ Plan D10 and F2.
 import json
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import boto3
 
@@ -187,10 +187,63 @@ def _handle_ecs(event: dict) -> dict[str, object]:
 
 
 def _emit_recovery_time(now: datetime, dimensions: dict[str, str]) -> None:
-    # Task 4. Deliberately a no-op rather than absent: _handle_ecs already calls
-    # it at the one point in the sequence where it has to run (plan D7), so the
-    # ordering is established by the task that can be tested for it.
-    return None
+    """Emit RecoveryTimeSeconds when this success ends an outage.
+
+    Stateless by construction: the metric store is the state store. One query
+    returns both series newest-first; if the most recent failure has no success
+    after it, this success is the recovery.
+
+    MUST be called before DeploymentSucceeded is written for this event, or the
+    query finds the datapoint it is about to create. Plan D7.
+    """
+    lookback_days = int(os.environ.get("BGD_MTTR_LOOKBACK_DAYS", DEFAULT_MTTR_LOOKBACK_DAYS))
+    metric_dimensions = [
+        {"Name": name, "Value": value} for name, value in sorted(dimensions.items())
+    ]
+
+    def query(query_id: str, metric_name: str) -> dict:
+        return {
+            "Id": query_id,
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": _namespace(),
+                    "MetricName": metric_name,
+                    "Dimensions": metric_dimensions,
+                },
+                # 60s to match the resolution these are written at; anything
+                # coarser rounds a recovery to the nearest bucket.
+                "Period": 60,
+                "Stat": "Sum",
+            },
+        }
+
+    response = _client("cloudwatch").get_metric_data(
+        StartTime=now - timedelta(days=lookback_days),
+        EndTime=now,
+        # Newest first, so Timestamps[0] of each series is the latest datapoint
+        # and neither series has to be sorted here.
+        ScanBy="TimestampDescending",
+        MetricDataQueries=[
+            query("failed", METRIC_DEPLOYMENT_FAILED),
+            query("succeeded", METRIC_DEPLOYMENT_SUCCEEDED),
+        ],
+    )
+
+    latest = {
+        result["Id"]: (result["Timestamps"][0] if result.get("Timestamps") else None)
+        for result in response.get("MetricDataResults", [])
+    }
+    last_failure, last_success = latest.get("failed"), latest.get("succeeded")
+
+    if last_failure is None:
+        LOGGER.info("no failure in the last %s days; this success recovers nothing", lookback_days)
+        return
+
+    if last_success is not None and last_success >= last_failure:
+        LOGGER.info("the last failure was already followed by a success; not a recovery")
+        return
+
+    _put(METRIC_RECOVERY_TIME, (now - last_failure).total_seconds(), "Seconds", dimensions)
 
 
 def _pipeline_console_url(event: dict, pipeline: str, execution_id: str) -> str:
