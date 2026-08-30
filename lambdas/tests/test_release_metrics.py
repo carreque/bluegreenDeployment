@@ -157,3 +157,13 @@ def test_an_alert_without_a_topic_arn_logs_rather_than_raising(clients, monkeypa
 
     assert clients["sns"].published == []
     assert "BGD_ALERT_TOPIC_ARN" in caplog.text
+
+
+def test_an_ordinary_failure_whose_reason_merely_contains_back_is_not_a_rollback(clients):
+    # "backend", "backoff" and "fallback" all contain "back". Matching that
+    # bare substring would move a real failure out of the change-failure-rate
+    # numerator and email the operator the wrong verdict. D8.
+    h.handler(_ecs("SERVICE_DEPLOYMENT_FAILED", reason="backend unhealthy, backoff limit"), None)
+
+    assert _metric_names(clients["cloudwatch"]) == [h.METRIC_DEPLOYMENT_FAILED]
+    assert "FAILED" in clients["sns"].published[0]["Subject"]

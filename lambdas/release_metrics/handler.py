@@ -50,6 +50,15 @@ METRIC_PIPELINE_FAILED = "PipelineFailed"
 SUCCEEDED_EVENTS = frozenset({"SERVICE_DEPLOYMENT_COMPLETED"})
 FAILED_EVENTS = frozenset({"SERVICE_DEPLOYMENT_FAILED"})
 
+# Matched against the free-text `reason`, because a rollback may arrive shaped
+# like a failure and the event name alone is not enough. Three phrasings rather
+# than one substring: ECS writes "rolling back", "rolled back" and "rollback"
+# in different messages, and no single substring covers all three. Emphatically
+# NOT the bare word "back" — that also matches "backend", "backoff" and
+# "fallback", any of which would misfile an ordinary failure as a rollback and
+# quietly remove it from the change-failure-rate numerator D8 is about.
+ROLLBACK_REASON_PHRASES = ("rollback", "rolling back", "rolled back")
+
 # One client per service per container, created on first use rather than at
 # import. Two reasons: a module-level boto3.client() runs during the cold start
 # of every invocation whether or not that call is needed, and — the reason that
@@ -146,7 +155,8 @@ def _handle_ecs(event: dict) -> dict[str, object]:
     service = _service_name(event)
     dimensions = {"Environment": _environment()}
 
-    if "ROLLBACK" in event_name or "back" in reason.lower():
+    lowered_reason = reason.lower()
+    if "ROLLBACK" in event_name or any(p in lowered_reason for p in ROLLBACK_REASON_PHRASES):
         _put(METRIC_DEPLOYMENT_ROLLED_BACK, 1, "Count", dimensions)
         _alert(
             f"[bgd] Production deployment ROLLED BACK — {service}",
