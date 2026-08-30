@@ -47,13 +47,18 @@ Passed checks: 488, Failed checks: 0, Skipped checks: 110
 ```
 
 148 test runs across five layers, all green. Foundation carries the whole of
-this phase's Terraform: **65 → 75**, ten new runs across two new files
-(`observability.tftest.hcl`'s eight and the one new run each in
-`pipeline_shape.tftest.hcl` and `outputs`-adjacent assertions), on top of the
-four pre-existing suites that gained one `override_resource` block apiece
-(§3.2). Network, staging and bootstrap are untouched by this phase and their
-counts (17, 16, 5) match Phase 8's record exactly. Prod stays at **35** —
-Task 8 inverted an existing assertion rather than adding a run.
+this phase's Terraform: **65 → 75**, ten new runs across two new files —
+`observability.tftest.hcl` (7 `run` blocks) and `dashboard.tftest.hcl` (3
+`run` blocks, the suite that covers the widget rendered wrong by the
+`flatten()` bug in §3.6) — on top of four pre-existing suites
+(`pipeline_iam.tftest.hcl`, `pipeline_shape.tftest.hcl`,
+`app_pipeline_iam.tftest.hcl`, `app_pipeline_shape.tftest.hcl`) that each
+gained one `override_resource` block (§3.2) with no new `run` block of their
+own; `pipeline_shape.tftest.hcl` also gained the `lambdas/**` pattern inside
+an *existing* run's assertion rather than a new run. Network, staging and
+bootstrap are untouched by this phase and their counts (17, 16, 5) match
+Phase 8's record exactly. Prod stays at **35** — Task 8 inverted an existing
+assertion rather than adding a run.
 
 ```
 $ make test-lambdas
@@ -268,6 +273,17 @@ than removed, because the task doing this investigation was permitted to
 touch `observability.tf` only for a checkov finding, and no finding under any
 ID required a change here.
 
+The skip count itself says something sharper than "inert": removing **both**
+directives moved the totals from 488 passed / 110 skipped to 489 passed / 109
+skipped — one check moved from skipped to passed, not two, even though two
+`checkov:skip=CKV_AWS_355` comments were removed. Both statements belong to
+the same single `aws_iam_role_policy.release_metrics` resource, and checkov
+evaluates `CKV_AWS_355` **per resource, not per statement** — so the second
+comment could never have suppressed anything even in principle, independent
+of whether the check fires at all. That is what makes the ruling below
+straightforward rather than a judgment call: a directive that cannot possibly
+act on the statement it sits beside has no honest reading as a suppression.
+
 **Ruling:** the two comments become ordinary comments carrying the same
 reasoning, in this documentation-only task's fix wave, since their content —
 "`PutMetricData` accepts no resource ARN, so `*` is the only value it takes,
@@ -297,9 +313,11 @@ This is inherent to the framework, not a gap this phase could have closed.
 
 ### 3.6 A dashboard bug the offline gate could not see
 
-`terraform test` proves `dashboard_body` is valid JSON with a `widgets` array
-present; it does not prove any individual widget is well-formed CloudWatch
-shape. Task 9's offline structural render — copying `dashboard.tf`'s locals
+`infra/foundation/tests/dashboard.tftest.hcl` (the suite gaining three of
+this phase's ten new Terraform runs, §1) proves `dashboard_body` is valid
+JSON with a `widgets` array present; it does not prove any individual widget
+is well-formed CloudWatch shape. Task 9's offline structural render — copying
+`dashboard.tf`'s locals
 into a standalone scratch config, substituting literals for the two
 `aws_codepipeline.*.name` references and `local.observability`, and
 `jsonencode`-ing the result through an output with `terraform apply` on zero
@@ -373,7 +391,7 @@ Python interpreter. What that proves and what it does not:
   bake-alarm rollback actually produce (F3), whether
   `artifactRevisions[].created` is populated for this account's CodeConnections
   source (F4), or whether any `SEARCH()` widget matches a real metric (F8).
-  Nothing offline can answer any of the three — see §6.
+  Nothing offline can answer any of the three — see §7.
 
 ---
 
@@ -391,7 +409,7 @@ criterion at **step 5** (decline the production approval — not the
 dashboard criterion at **step 10** (open the dashboard and confirm every
 widget draws, including the ALB `SEARCH()` widgets against a sibling widget on
 literal dimensions as the control). Steps 8, 11, 12 and 13 close the three
-findings the branch alone could not (§6) and confirm the watchdog alarm path
+findings the branch alone could not (§7) and confirm the watchdog alarm path
 that does not travel through the collector.
 
 ---

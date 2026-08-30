@@ -401,7 +401,7 @@ tags on all of the above:
 >
 > ```
 > Lambda function      bgd-us-east-1-release-metrics
-> Lambda exec role      bgd-us-east-1-release-metrics-role
+> Lambda exec role      bgd-us-east-1-release-metrics-exec-role
 > Log group             /aws/lambda/bgd-us-east-1-release-metrics
 > Event rules            bgd-us-east-1-pipeline-executions
 >                        bgd-us-east-1-prod-deployments
