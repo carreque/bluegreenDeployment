@@ -8,9 +8,10 @@
 # Called only from CodeBuild, by pipelines/infra-plan.yml and
 # pipelines/infra-apply.yml. Local work still goes through `make plan-<layer>`
 # and `make apply-<layer>`, which call scripts/tf.sh — and so does this, which
-# is why the layer-name-to-directory mapping appears here nowhere. That map
-# already exists in three places (tf.sh, lint-infra.sh, teardown.sh) and a
-# fourth copy would be a fourth thing to forget.
+# is why the layer-name-to-directory mapping appears here nowhere. Phase 10
+# moved that map into lib/common.sh as layer_dir(), when rebuild.sh would have
+# been its fourth copy; lint-infra.sh keeps a variant of its own because its
+# contract differs (Phase 10 §D13, §F6).
 #
 # Three things it does that scripts/tf.sh deliberately does not:
 #

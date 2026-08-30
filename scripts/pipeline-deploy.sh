@@ -9,9 +9,10 @@
 # Called only from CodeBuild, by pipelines/app-deploy.yml, app-plan.yml and
 # app-apply.yml. Local work still goes through `make apply-staging` and
 # `make apply-prod`, which call scripts/tf.sh — and so does this, which is why
-# the layer-name-to-directory map appears here nowhere. It already exists in
-# three places (tf.sh, lint-infra.sh, teardown.sh) and a fourth copy would be a
-# fourth thing to forget.
+# the layer-name-to-directory map appears here nowhere. Phase 10 moved that map
+# into lib/common.sh as layer_dir(), when rebuild.sh would have been its fourth
+# copy; lint-infra.sh keeps a variant of its own because its contract differs
+# (Phase 10 §D13, §F6).
 #
 # ---------------------------------------------------------------------------
 # Why this runs Terraform rather than the standard ECS deploy action
