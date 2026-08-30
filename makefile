@@ -243,8 +243,11 @@ seed-ecr: ## Push the built image into ECR (needs an AWS session)
 # Phase 4 — network
 # ---------------------------------------------------------------------------
 
+# SCOPE names where the run stops: prod destroys prod only, staging destroys
+# prod and staging, network (the default) destroys all three. foundation and
+# bootstrap are never reachable — see the plan's D16.
 .PHONY: teardown
-teardown: ## Destroy prod, then staging, then network (needs an AWS session)
+teardown: ## Destroy prod, staging and network; SCOPE=prod|staging|network (needs an AWS session)
 	@./scripts/teardown.sh
 
 .PHONY: verify-network
