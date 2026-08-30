@@ -168,6 +168,40 @@ run "every_environment_layer_has_an_image_tag_parameter" {
   }
 }
 
+run "the_platform_carries_a_deployed_scope_marker" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_parameter.deployed_scope.name == "/bgd/platform/deployed_scope"
+    error_message = "scripts/lib/common.sh looks this name up as a literal; the two must agree or teardown writes a parameter nothing reads"
+  }
+
+  # `all`, not `foundation`, and the difference is what a fresh account does.
+  # A marker defaulting to foundation would clamp `network` on an account that
+  # had simply never been torn down, and every runbook from Phase 4 on would
+  # need a step it does not have. Plan §D4.
+  assert {
+    condition     = aws_ssm_parameter.deployed_scope.value == "all"
+    error_message = "the marker must default to all, so it can only ever restrict — and only after somebody ran teardown"
+  }
+
+  assert {
+    condition     = aws_ssm_parameter.deployed_scope.type == "String"
+    error_message = "a scope name is read by two pipeline roles and printed in every skip message; SecureString would imply it is a secret and cost both roles a KMS grant"
+  }
+
+  # `ignore_changes = [value]` cannot be asserted here: lifecycle is a
+  # meta-argument and has no representation in a resource's plan object. What
+  # CAN be asserted is the property that makes it necessary — the value is a
+  # literal that every apply would otherwise reassert — plus a description that
+  # names the two writers, so a reader who removes the lifecycle block has been
+  # told what it was for.
+  assert {
+    condition     = strcontains(aws_ssm_parameter.deployed_scope.description, "teardown.sh") && strcontains(aws_ssm_parameter.deployed_scope.description, "rebuild.sh")
+    error_message = "the description must name both writers; ignore_changes = [value] is what stops the next apply reverting them, and it is reviewed rather than planned"
+  }
+}
+
 run "only_the_validate_project_runs_containers" {
   command = plan
 
@@ -428,5 +462,10 @@ run "the_outputs_phase_8_and_9_consume_are_present" {
   assert {
     condition     = toset(keys(output.image_tag_parameter_names)) == toset(["staging", "prod"])
     error_message = "Phase 8 writes these parameters after pushing an image and needs their names from the layer that owns them"
+  }
+
+  assert {
+    condition     = output.deployed_scope_parameter_name == "/bgd/platform/deployed_scope"
+    error_message = "Phase 10's runbook reads the marker through this output rather than typing the path again"
   }
 }
