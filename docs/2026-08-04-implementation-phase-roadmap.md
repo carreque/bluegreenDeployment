@@ -416,6 +416,89 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 
 **Exit criteria:** a change to an environment layer flows through the pipeline and applies; a `DEPLOY_SCOPE=network` run demonstrably leaves production untouched.
 
+> **Amended in Phase 7 (2026-08-29).** The phase built more than this task list
+> names, all decided and recorded in [the Phase 7
+> plan](./phases/phase7/2026-08-29-phase-07-implementation-plan.md)'s §0.1:
+>
+> - **Two SSM parameters and a change to `scripts/seed-ecr.sh`** (D8). Not in
+>   the task list, and the task list cannot work without them: it assumes the
+>   pipeline can plan every layer, and two of the four declare `image_tag` with
+>   no default whose value lives in a gitignored `terraform.tfvars` (F7). A
+>   CodeBuild workspace therefore has no value at all and
+>   `terraform plan -input=false` fails before it authenticates to anything.
+>   `foundation` gains `/bgd/staging/image_tag` and `/bgd/prod/image_tag`, each
+>   with `ignore_changes = [value]`, and `seed-ecr.sh` writes the tag it pushed.
+>   The side effect is the property that matters most: an `infra/**` merge
+>   plans with the tag already recorded, so the infra pipeline is
+>   **image-preserving by construction** rather than by convention — design
+>   §1.5's separation enforced by mechanism.
+> - **Three CodeBuild projects and four IAM roles**, where design §8.1 names one
+>   CodeBuild role and one CodePipeline role (D5, D6, F3). `action.role_arn` on
+>   a CodePipeline action is the role CodePipeline assumes to *invoke* the
+>   action; a build's own permissions come from `service_role` on the project,
+>   which cannot be overridden per action. Three roles that differ in what a
+>   build may do therefore means three projects — and the split is the whole
+>   reason the plan role can be genuinely `ReadOnlyAccess` while the apply role
+>   is `AdministratorAccess`. Which *layer* a build works on is not a property
+>   of the project: it arrives per action as `LAYER`, so eight actions share two
+>   projects.
+> - **`DEPLOY_SCOPE`'s four values are cumulative, and `all` means "through
+>   prod"** (D3). The phrasing above already implies it; stated as a table so it
+>   cannot be read the other way:
+>
+>   | `DEPLOY_SCOPE` | Foundation | Network | Staging | Prod |
+>   |---|---|---|---|---|
+>   | `foundation` | apply | skip | skip | skip |
+>   | `network` | apply | apply | skip | skip |
+>   | `staging` | apply | apply | apply | skip |
+>   | `all` | apply | apply | apply | apply |
+>
+>   Cumulative rather than exclusive because the layers are ordered by
+>   dependency: `staging` reads `network`'s outputs through remote state, and
+>   applying staging against a network that was never applied is the failure the
+>   ordering exists to prevent. An unrecognised value applies nothing, loudly.
+> - **The scope is enforced twice** (D4), and the second gate is not redundancy
+>   for its own sake. `before_entry`'s `VariableCheck` rule takes an untyped
+>   `map(string)` configuration, so whether `MATCHES` is an accepted operator is
+>   not in the provider schema and cannot be confirmed without an AWS session
+>   (F2). The failure modes are asymmetric: a condition wrong in the direction
+>   of *entering* a stage costs an unwanted approval when the script refuses,
+>   and would have applied production if the script were absent. The condition
+>   is the optimisation; the script is the guarantee.
+> - **One stage per layer with three actions, not three stages per layer** (D2).
+>   `before_entry` is a stage-level condition, so one condition skips a layer's
+>   plan, its approval and its apply together, atomically. Six stages, not
+>   fourteen.
+> - **`LINUX_CONTAINER`, not `ARM_CONTAINER`** (D7) — and the reason is the
+>   *opposite* of Phase 2's amendment, which requires `ARM_CONTAINER` for Phase
+>   8's app build. `scripts/lint-infra.sh` runs digest-pinned tflint and checkov
+>   containers, and those digests passing locally does not prove they have
+>   `linux/arm64` variants: Docker Desktop emulates amd64 transparently and
+>   CodeBuild does not. Both choices are right; the divergence should read as
+>   deliberate.
+> - **The trigger watches four path patterns, not one** (D12): `infra/**`,
+>   `pipelines/**`, `scripts/pipeline-*.sh` and `scripts/install-terraform.sh`
+>   — the pipeline's own executable content, because a change to a buildspec
+>   changes what every stage does. `scripts/**` as a whole is deliberately
+>   excluded: it also holds Phase 8's build scripts, and watching the directory
+>   would run a four-approval infra deployment on an application change.
+>   `DetectChanges` is `"false"` on the source action so change detection has
+>   one mechanism rather than two (D13).
+> - **`execution_mode = "QUEUED"`** (D11), not the V2 `SUPERSEDED` default,
+>   which would cancel a run whose approval someone is part-way through reading
+>   — or one mid-apply — when a second merge lands.
+> - **Apply applies the saved plan file** (D9), and does not re-plan. Otherwise
+>   the approval approves a description and the apply computes something else.
+>
+> **Neither exit criterion is met by the branch alone.** Both need a pipeline
+> that exists and a run that happened, and the Phase 7 session created no AWS
+> resource (D1). They are met by [the
+> runbook](./runbooks/phase-07-infra-pipeline.md) — steps 6 and 7 respectively.
+>
+> §2's branch table row 7 reads `feat/Phase7_InfraPipeline`, which is the branch
+> used. **No amendment needed there** — recorded explicitly, as Phases 3, 5 and
+> 6 did, so the absence reads as checked rather than overlooked.
+
 ### Phase 8 — Application pipeline
 
 - CodePipeline v2 filtered to `app/**` on `main`.

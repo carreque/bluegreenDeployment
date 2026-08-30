@@ -62,3 +62,23 @@ output "github_connection_arn" {
   description = "CodeConnections ARN. Both pipelines source through it; unusable until authorised in the console."
   value       = aws_codeconnections_connection.github.arn
 }
+
+output "infra_pipeline_name" {
+  description = "Name of the infrastructure pipeline. Phase 9's EventBridge rule filters execution state changes on it."
+  value       = aws_codepipeline.infra.name
+}
+
+output "infra_pipeline_arn" {
+  description = "ARN of the infrastructure pipeline."
+  value       = aws_codepipeline.infra.arn
+}
+
+output "infra_apply_role_arn" {
+  description = "The role the pipeline's applies run as. Recorded because 'who changed this' is the first question about any resource this project creates."
+  value       = aws_iam_role.infra_apply.arn
+}
+
+output "image_tag_parameter_names" {
+  description = "SSM parameters holding the tag each environment deploys, keyed by environment. Phase 8 writes these after pushing an image; scripts/pipeline-terraform.sh reads them."
+  value       = { for env, p in aws_ssm_parameter.image_tag : env => p.name }
+}

@@ -69,3 +69,52 @@ variable "noncurrent_artifact_retention_days" {
   type        = number
   default     = 90
 }
+
+variable "github_repository_id" {
+  description = "owner/name of the repository CodePipeline sources from, through the CodeConnections link."
+  type        = string
+  default     = "carreque/bluegreenDeployment"
+
+  validation {
+    condition     = can(regex("^[^/]+/[^/]+$", var.github_repository_id))
+    error_message = "github_repository_id must be owner/name, not a URL."
+  }
+}
+
+variable "github_branch" {
+  description = "Branch the infra pipeline watches. Merging to it is what fires a deployment (roadmap §2.1)."
+  type        = string
+  default     = "main"
+}
+
+variable "deploy_scope_default" {
+  description = <<-EOT
+    DEPLOY_SCOPE for a run nobody chose a scope for.
+
+    A run started by the git trigger cannot supply execution variables, so every
+    merge to main takes this value (plan §F4). It is `all` deliberately: an infra
+    change is normally a change you want in production, and the four manual
+    approvals — not this default — are what stand between the merge and prod.
+
+    Cumulative. `staging` also applies foundation and network; `all` reaches prod.
+  EOT
+  type        = string
+  default     = "all"
+
+  validation {
+    condition     = contains(["foundation", "network", "staging", "all"], var.deploy_scope_default)
+    error_message = "deploy_scope_default must be one of foundation, network, staging, all."
+  }
+}
+
+variable "pipeline_log_retention_days" {
+  description = "Retention on the three CodeBuild log groups. A pipeline log is worth keeping only until the next deployment is understood."
+  type        = number
+  default     = 30
+}
+
+variable "pipeline_artifact_retention_days" {
+  description = "How long CodePipeline's own artifacts — the source zip and the four saved plans, one set per execution — are kept before the lifecycle rule expires them."
+  type        = number
+  default     = 30
+}

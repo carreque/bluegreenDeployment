@@ -457,6 +457,45 @@ Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task 
 > `AmazonECSInfrastructureRolePolicyForLoadBalancers`. Every other role in the
 > project is still hand-written. See the Phase 6 plan's D5.
 
+> **Amended in Phase 7 (2026-08-29).** The single **CodeBuild** role above is
+> three: `infra-validate`, `infra-plan` and `infra-apply`.
+>
+> The forcing fact is that a build's permissions come from `service_role` on
+> `aws_codebuild_project`, which is a property of the *project*.
+> `action.role_arn` on a CodePipeline action is a different thing — the role
+> CodePipeline assumes to *invoke* the action, whose documented use is
+> cross-account actions — and it cannot substitute. `EnvironmentVariables` can
+> be overridden per action; the service role cannot. So three roles that differ
+> in what a build may do means three projects, and one shared role would mean
+> every infra build ran with the reach the widest of them needs.
+>
+> The split is what makes this section's stated premise true rather than
+> aspirational. `infra-plan` attaches `ReadOnlyAccess` plus four narrow
+> additions — the `*.tflock` lock file, both spellings of the CodeConnections
+> read API, the two image-tag parameters and its own log group — because a plan
+> reads the world and writes nothing but a lock, so least privilege costs
+> nothing here and a compromised plan build cannot mutate the account.
+> `infra-validate` is narrower still and makes **no AWS API call at all**: it
+> runs `terraform validate` and `terraform test` with `-backend=false`, and
+> tflint and checkov read files. A test asserts that its policy contains no
+> action outside `logs:` and `s3:`, because that property erodes the first time
+> someone adds a step needing "just one read" and nothing fails when they do.
+>
+> `infra-apply` attaches `AdministratorAccess`, and the reason is the same rule
+> the Phase 6 amendment above applied to the blue/green controller, reaching an
+> opposite-looking conclusion: **write the policy that is honest about the
+> boundary, not the one that looks strict.** This role creates IAM roles in four
+> layers, and a principal that can create a role and attach a policy to it can
+> already grant itself anything — so a narrower policy would describe a boundary
+> that does not exist, while failing at apply time in whichever layer it forgot.
+> The control that stands between a merge and a production change is not this
+> role: it is the manual approval on a plan a human read, and the fact that the
+> apply applies that plan file rather than deciding again. See the Phase 7
+> plan's D5, D6 and F3.
+>
+> With the CodePipeline role, this phase creates four. Design §8.1's list is
+> therefore nine roles, not six.
+
 ---
 
 ## 9. Repository layout
