@@ -97,5 +97,36 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
     }
   }
 
+  # The APPLICATION pipeline's store, and the split here is design 4.2's.
+  #
+  # Two prefixes in this bucket, two fates. This rule covers <pipelineName>/ —
+  # a clone reference and one saved production plan per execution, worth
+  # nothing the day after the run. It does NOT cover var.app_artifact_prefix,
+  # where the build publishes the SBOM, both test reports and
+  # build-metadata.json: the design asks for "an SBOM for the image running in
+  # production three deployments ago", and those objects are all current
+  # versions, so the bucket-wide noncurrent rule at the top expires none of
+  # them and nothing else should either. Plan D16.
+  #
+  # A test asserts no expiry rule's prefix covers app-builds/, and that it is
+  # scoped at all. Both halves were mutation-tested. That assertion is what
+  # stops a later tidying-up from deleting the history the design asked for.
+  rule {
+    id     = "expire-app-pipeline-artifacts"
+    status = "Enabled"
+
+    filter {
+      prefix = "${local.name_prefix}-app-pipeline/"
+    }
+
+    expiration {
+      days = var.app_pipeline_artifact_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
   depends_on = [aws_s3_bucket_versioning.artifacts]
 }

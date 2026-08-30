@@ -13,6 +13,7 @@ Planned, in the order they are needed:
 | [Staging apply, verification and teardown](./phase-05-staging.md) | 5 |
 | [Production apply and the blue/green demonstration](./phase-06-prod-blue-green.md) | 6 |
 | [The infra pipeline apply, both exit criteria, and repairing a broken pipeline definition by local apply](./phase-07-infra-pipeline.md) | 7 |
+| [The app pipeline apply, the exit criterion, and both narrow-scope runs](./phase-08-app-pipeline.md) | 8 |
 | Teardown and rebuild — what survives, what does not, how long it takes | 10 |
 | The three rollback demonstrations | 11 |
 
@@ -22,6 +23,14 @@ stand between a merge and production. One consequence has its own step in the
 Phase 7 runbook: the pipeline manages the layer that contains it, so a change
 that breaks the pipeline definition cannot be repaired by the pipeline and
 needs a local `make apply-foundation`.
+
+From Phase 8 the same is true of `app/`, with **one** approval rather than
+four — the compensating controls there are Phase 6's dark canary hook and bake
+alarms, not more gates. Both pipelines live in `infra/foundation`, so both have
+the repair caveat above, and **both survive a teardown**: after `make teardown`
+they are still armed, and a merge to `main` will fire one against an account
+that no longer has a network. The Phase 8 runbook's last section says what to do
+about that.
 
 The project has exactly **three** irreducibly manual steps, all in Phase 3:
 authorising the CodeConnections link, confirming the SNS email subscription, and

@@ -279,4 +279,17 @@ smoke-%: FORCE
 test-lambdas: deps ## Run the Lambda handler suite
 	@cd $(LAMBDA_DIR) && $(PY) -m pytest
 
+# ---------------------------------------------------------------------------
+# Phase 8 — application pipeline
+# ---------------------------------------------------------------------------
+
+# seed-ecr without the SSM writes: put an image in the registry that nothing is
+# yet deploying. That is the application pipeline's own build step (the two
+# parameters are written after a successful apply, plan §D9), and it is also
+# the case you want by hand — Phase 11 pushes a deliberately broken image and
+# deploys it later, at the moment the screenshots are being taken.
+.PHONY: push-image
+push-image: ## Push the built image into ECR without recording it as deployed (needs an AWS session)
+	@./scripts/push-image.sh
+
 # PLANNED: rebuild        Apply network then staging then prod (Phase 10)

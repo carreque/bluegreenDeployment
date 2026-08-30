@@ -127,6 +127,15 @@ tmp/
 scratch/
 *.local
 
-# Written by scripts/pipeline-terraform.sh for the buildspec to source. A
-# CodeBuild-only file that a local debugging run also produces.
+# Written by scripts/pipeline-terraform.sh and scripts/pipeline-deploy.sh for
+# the buildspec to source. CodeBuild-only files that a local debugging run also
+# produces.
 plan-vars.env
+
+# Written by scripts/pipeline-app-build.sh, holding the tag and digest every
+# stage after Build interpolates. Same shape, same reason.
+build-vars.env
+
+# Written by scripts/pipeline-deploy.sh in deploy mode, holding the URL and
+# digest the smoke action is handed so it needs no AWS credentials of its own.
+deploy-vars.env

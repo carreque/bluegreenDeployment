@@ -118,3 +118,82 @@ variable "pipeline_artifact_retention_days" {
   type        = number
   default     = 30
 }
+
+# ---------------------------------------------------------------------------
+# Phase 8 — the application pipeline
+# ---------------------------------------------------------------------------
+
+variable "app_scope_default" {
+  description = <<-EOT
+    APP_SCOPE for a run nobody chose a scope for.
+
+    A run started by the git trigger cannot supply execution variables, so every
+    merge to main under app/** takes this value — the same fact Phase 7 §F4
+    recorded for DEPLOY_SCOPE. It is `all` deliberately: an application change is
+    normally a change you want in production, and the manual approval on a plan a
+    human read — not this default — is what stands between the merge and prod.
+
+    Cumulative, and it names where a run STOPS. `build` builds, tests, SBOMs and
+    pushes without deploying anything, which is what Phase 11 needs to put a
+    deliberately broken image in the registry. `staging` also deploys and smokes
+    staging. `all` reaches production.
+  EOT
+  type        = string
+  default     = "all"
+
+  validation {
+    condition     = contains(["build", "staging", "all"], var.app_scope_default)
+    error_message = "app_scope_default must be one of build, staging, all."
+  }
+}
+
+variable "app_build_compute_type" {
+  description = <<-EOT
+    Compute size for the image build.
+
+    Its own variable rather than the shared local the three infra projects use,
+    because this is the only ARM project in the account and the only one that
+    runs a buildx build and two test containers.
+
+    SMALL, and the reason is a constraint rather than a preference: CodeBuild's
+    documented compute matrix offers ARM_CONTAINER only BUILD_GENERAL1_SMALL and
+    BUILD_GENERAL1_LARGE, and which sizes a region actually accepts cannot be
+    confirmed without an AWS session (plan §F12). SMALL is the value that is
+    certainly valid; LARGE is the escalation if the build turns out to be the
+    long pole of a deployment, and it is one variable away.
+  EOT
+  type        = string
+  default     = "BUILD_GENERAL1_SMALL"
+
+  validation {
+    condition     = contains(["BUILD_GENERAL1_SMALL", "BUILD_GENERAL1_LARGE"], var.app_build_compute_type)
+    error_message = "app_build_compute_type must be BUILD_GENERAL1_SMALL or BUILD_GENERAL1_LARGE — ARM_CONTAINER offers no others."
+  }
+}
+
+variable "app_artifact_prefix" {
+  description = <<-EOT
+    Key prefix in the artifact bucket under which the build publishes the SBOM,
+    the two test reports and build-metadata.json, one directory per image tag.
+
+    Deliberately NOT covered by any expiry rule (plan §D16): design §4.2 wants
+    an SBOM for the image running in production three deployments ago, and that
+    is only available if the object describing it is still there.
+  EOT
+  type        = string
+  default     = "app-builds"
+}
+
+variable "app_pipeline_artifact_retention_days" {
+  description = <<-EOT
+    How long the APPLICATION pipeline's own artifacts — the clone reference and
+    one saved production plan per execution — are kept before the prefix-scoped
+    lifecycle rule expires them.
+
+    Separate from var.pipeline_artifact_retention_days so the two pipelines'
+    stores can diverge without one edit silently changing both, and because
+    this one's rule must never be widened to cover var.app_artifact_prefix.
+  EOT
+  type        = number
+  default     = 30
+}

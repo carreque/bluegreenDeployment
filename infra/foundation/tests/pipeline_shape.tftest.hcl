@@ -73,6 +73,41 @@ override_resource {
   values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-infra-apply-role" }
 }
 
+# Phase 8's six roles. Nothing in this file asserts on them, and they are here
+# because `command = apply` applies the WHOLE module: their five projects
+# validate service_role client-side too, and an un-overridden mock ARN is an
+# eight-character string rather than an ARN. Found while adding the app
+# pipeline (Phase 8 §F16); a Phase 9 role set will need the same three lines.
+override_resource {
+  target = aws_iam_role.app_pipeline
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-pipeline-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_image
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-image-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_deploy_staging
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-deploy-staging-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_smoke
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-smoke-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_plan_prod
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-plan-prod-role" }
+}
+
+override_resource {
+  target = aws_iam_role.app_deploy_prod
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-deploy-prod-role" }
+}
+
 variables {
   project_name = "bgd"
   region       = "us-east-1"
@@ -280,9 +315,14 @@ run "the_trigger_filters_the_paths_the_pipeline_actually_owns" {
 
   assert {
     condition = toset(aws_codepipeline.infra.trigger[0].git_configuration[0].push[0].file_paths[0].includes) == toset([
-      "infra/**", "pipelines/**", "scripts/pipeline-*.sh", "scripts/install-terraform.sh"
+      "infra/**",
+      "pipelines/infra-*.yml",
+      "scripts/pipeline-terraform.sh",
+      "scripts/install-terraform.sh",
+      "scripts/tf.sh",
+      "scripts/lib/common.sh",
     ])
-    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12)"
+    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12). Narrowed from pipelines/** and scripts/pipeline-*.sh in Phase 8, because both matched that phase's files (Phase 8 §F4) — widening either back reintroduces the cross-trigger."
   }
 
   assert {

@@ -71,6 +71,39 @@ bgd-us-east-1-api            (ECR)
 
 The environment still appears on every resource as a **tag** (§5), which is what cost allocation and filtering actually query. The name segment exists only to keep names unique and readable.
 
+> **Amended in Phase 8 (2026-08-30).** A reading this section did not
+> anticipate, recorded so a later reviewer does not "fix" four correct names.
+>
+> The application pipeline's CodeBuild projects, IAM roles and log groups are
+> **project-wide resources** — they live in `infra/foundation`, whose
+> `environment` tag is `shared`, and there is exactly one of each. By the rule
+> above they take no `<env>` segment. But four of them contain the word
+> `staging` or `prod`:
+>
+> ```
+> bgd-us-east-1-app-deploy-staging-build     (CodeBuild project)
+> bgd-us-east-1-app-deploy-staging-role      (IAM role)
+> bgd-us-east-1-app-plan-prod-role           (IAM role)
+> /bgd/us-east-1/shared/app-deploy-staging   (log group)
+> ```
+>
+> **In these names, `staging` and `prod` are part of the *purpose* — which
+> environment the build acts on — not the `<env>` segment.** The distinction is
+> not pedantic: the `<env>` segment answers "which environment owns this
+> resource", and the answer for all four is *neither, they are shared*. The
+> resource segment answers "what does it do", and the answer includes the
+> environment it deploys to, because that is precisely what distinguishes it
+> from the project beside it.
+>
+> The log group makes the difference visible, since it carries both: the
+> `shared` in `/bgd/us-east-1/shared/…` is the environment segment, and the
+> `staging` after it is not.
+>
+> The same reading applies to the two SSM parameters Phase 7 created —
+> `/bgd/staging/image_tag` and `/bgd/prod/image_tag` — where the environment
+> names *whose tag this is*, and the parameters themselves are owned by the
+> shared layer.
+
 ---
 
 ## 3. Per-resource-type naming

@@ -70,32 +70,11 @@ layer_rank() {
   esac
 }
 
-# Written on every path out of plan mode, including the skip. Without the skip
-# case the approval action would interpolate the previous execution's summary,
-# which is a worse failure than an empty one — it describes changes that are
-# not in this run.
-write_vars() {
-  local status="$1" summary="$2" url="$3"
-  {
-    printf 'PLAN_STATUS=%q\n' "$status"
-    printf 'PLAN_SUMMARY=%q\n' "$summary"
-    printf 'PLAN_URL=%q\n' "$url"
-  } >"$VARS_FILE"
-}
-
-# The CodeBuild console deep link for this build, so the approval message can
-# offer the full plan behind the truncated summary. Built from the build ARN
-# because that is the only place the account id appears in a CodeBuild
-# environment. Empty outside CodeBuild, which is harmless — the field is
-# optional.
-build_url() {
-  [[ -n "${CODEBUILD_BUILD_ARN:-}" ]] || return 0
-  local _ arn_region arn_account project
-  IFS=':' read -r _ _ _ arn_region arn_account _ <<<"$CODEBUILD_BUILD_ARN"
-  project="${CODEBUILD_BUILD_ID%%:*}"
-  printf 'https://%s.console.aws.amazon.com/codesuite/codebuild/%s/projects/%s/build/%s/?region=%s' \
-    "$arn_region" "$arn_account" "$project" "${CODEBUILD_BUILD_ID//:/%3A}" "$arn_region"
-}
+# write_vars, build_url and plan_summary come from lib/common.sh. They lived
+# here until Phase 8, whose pipeline-deploy.sh needs all three identically —
+# and a plan summary formatted one way in this pipeline's approval and another
+# way in that one's would be a difference nobody chose. Same rule
+# image_build_identity carries.
 
 # ---------------------------------------------------------------------------
 # Gate 1 of 1 in this script, and gate 2 of 2 in the pipeline.
@@ -200,30 +179,15 @@ case "$status" in
     ok "$summary"
     ;;
   2)
-    # `terraform show` on the saved plan rather than scraping the plan output,
-    # so the summary describes the artifact Apply will consume rather than the
-    # text that scrolled past. The Plan: line first, then the resource
-    # addresses, which is the order someone reads an approval in.
-    summary="$(
-      terraform -chdir="$ROOT/$dir" show -no-color "$PLAN_FILE" |
-        grep -E '^(Plan:|  # )' |
-        sed 's/^  # //'
-    )"
+    summary="$(plan_summary "$ROOT/$dir" "$PLAN_FILE")"
     ;;
   *)
     die "terraform plan failed for $layer (exit $status)"
     ;;
 esac
 
-# One line, and short. A CodePipeline variable and a manual approval's
-# CustomData are both capped at 1000 characters, and a newline inside a
-# KEY=value line would break the `. plan-vars.env` the buildspec does. The
-# full plan is one click away through PLAN_URL, which is the point of
-# exporting it.
-summary="$(printf '%s' "$summary" | tr '\n' ' ' | tr -s ' ')"
-if ((${#summary} > 900)); then
-  summary="${summary:0:880} … (truncated; full plan in the build log)"
-fi
+# The squeeze and the 900-character truncation are inside plan_summary. The
+# exit-0 branch above needs neither: "No changes." is already one short line.
 
 write_vars "$status" "$summary" "$(build_url)"
 

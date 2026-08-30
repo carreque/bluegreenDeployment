@@ -1,0 +1,26 @@
+# Apply the plan the approval approved. Not a new one. Plan §D11.
+#
+# The input artifact is the Plan action's output, so the saved plan is already
+# in the workspace at infra/environments/prod/pipeline.tfplan. No -var is
+# passed and none may be: `terraform apply <planfile>` rejects variables,
+# because the plan file already contains the values it was made with.
+#
+# IMAGE_TAG is still passed as an override, and it is not used by Terraform —
+# it is what the script records in /bgd/prod/image_tag AFTER the apply returns
+# 0 (plan §D9).
+#
+# This build blocks. The production service sets wait_for_steady_state, so the
+# apply does not return until green has been provisioned, tested by three
+# hooks, promoted and baked for five minutes under the alarms. The project's
+# build_timeout is 60 minutes for that reason and it should not be what decides
+# the deployment went badly.
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - ./scripts/install-terraform.sh
+
+  build:
+    commands:
+      - ./scripts/pipeline-deploy.sh apply prod

@@ -82,3 +82,32 @@ output "image_tag_parameter_names" {
   description = "SSM parameters holding the tag each environment deploys, keyed by environment. Phase 8 writes these after pushing an image; scripts/pipeline-terraform.sh reads them."
   value       = { for env, p in aws_ssm_parameter.image_tag : env => p.name }
 }
+
+# ---------------------------------------------------------------------------
+# Phase 8 - the application pipeline
+# ---------------------------------------------------------------------------
+
+output "app_pipeline_name" {
+  description = "Name of the application pipeline. Phase 9's EventBridge rule filters execution state changes on it, and it is the prefix the artifact lifecycle rule expires."
+  value       = aws_codepipeline.app.name
+}
+
+output "app_pipeline_arn" {
+  description = "ARN of the application pipeline."
+  value       = aws_codepipeline.app.arn
+}
+
+output "app_deploy_staging_role_arn" {
+  description = "The role the pipeline's staging deployments run as. Recorded because 'who changed this' is the first question about any resource, and because this role and the production one being different is a stated control (plan D6)."
+  value       = aws_iam_role.app_deploy_staging.arn
+}
+
+output "app_deploy_prod_role_arn" {
+  description = "The role the pipeline's production applies run as. Distinct from the staging one by design: two administrator roles cannot be told apart by policy, so the separation is structural."
+  value       = aws_iam_role.app_deploy_prod.arn
+}
+
+output "app_build_artifact_prefix" {
+  description = "Bucket prefix holding each build's SBOM, test reports and metadata, one directory per image tag. Deliberately covered by no expiry rule (design 4.2)."
+  value       = var.app_artifact_prefix
+}
