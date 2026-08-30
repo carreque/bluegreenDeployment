@@ -522,6 +522,30 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > `scripts/tf.sh`, `scripts/lib/common.sh`. A test asserts the set exactly, so
 > widening either of the first two back fails the offline gate.
 
+> **Amended a third time in Phase 9 (2026-08-30) — `lambdas/**` joins the
+> list.** Recorded here as well as in Phase 9's section, exactly as the
+> amendment above was recorded in both Phase 7's and Phase 8's sections.
+>
+> `infra/environments/prod/hooks.tf` has packaged
+> `lambdas/lifecycle_hook/handler.py` since Phase 6, and none of the six
+> patterns above matches `lambdas/`. A commit that edited only a hook's
+> handler changed no watched file: the infra pipeline would not run, and the
+> fix would never reach the function deployed from it — no error, no failed
+> run, nothing happens at all. The gap is three phases old, not something
+> Phase 9 introduced; Phase 9 is only the first phase to add a second Lambda
+> package under `lambdas/` and notice.
+>
+> The list is now seven patterns: the six above plus `lambdas/**`.
+> `filePaths.includes`'s eight-pattern cap — the same limit Phase 8's
+> amendment below hit at eleven — still has room for one more without
+> splitting into two `push` blocks. `foundation/tests/pipeline_shape.tftest.hcl`'s
+> pattern-set assertion is updated in the same commit as the trigger, and a
+> second, duplicate copy of that same assertion in
+> `foundation/tests/app_pipeline_shape.tftest.hcl` — added in Phase 8 to prove
+> that phase's narrowing — needed the identical update or it would have failed
+> the offline gate for a reason having nothing to do with what that file
+> tests.
+
 ### Phase 8 — Application pipeline
 
 - CodePipeline v2 filtered to `app/**` on `main`.
@@ -655,6 +679,116 @@ Only images flow through this pipeline. Task definition and service shape stay o
 - SNS email alerts on pipeline failure, deployment failure and rollback.
 
 **Exit criteria:** a real deployment produces metrics on the dashboard; a deliberately failed deployment produces an email.
+
+> **Amended in Phase 9 (2026-08-30).** Everything below is decided and argued
+> in [the Phase 9
+> plan](./phases/phase9/2026-08-30-phase-09-implementation-plan.md)'s §0.1.
+>
+> - **Everything but four alarm-action lines lives in `foundation`, and a
+>   layer cycle forces it rather than a style preference** (D2, F1). The
+>   tempting split — put the ECS rule and half the dashboard beside the
+>   service they watch, in `prod` — cannot be done: `prod/locals.tf` already
+>   reads `foundation`'s remote state, and a mirror the other way would make
+>   each layer depend on the other. Terraform would not report that as a
+>   cycle, because the two states are separate files read at plan time, not
+>   nodes in one graph — the symptom would be `foundation`'s plan failing to
+>   read a state file that `make teardown` had already emptied, in the layer
+>   whose entire purpose is surviving teardown. A second, independent reason
+>   would still apply if the first were solved: the metric history is the
+>   deliverable, and a dashboard destroyed and recreated every session is one
+>   nobody builds the habit of opening. `foundation` addresses `prod` by
+>   **name** — the ECS service ARN is built from this layer's own convention
+>   variables — not by ARN read through state. The one thing that can only be
+>   set where the alarm is, and therefore stays in `prod`, is `alarm_actions`
+>   on the four bake alarms.
+> - **The collector decides what is alert-worthy; EventBridge does not**
+>   (D3). An `input_transformer` on a direct EventBridge→SNS target would need
+>   no Lambda at all, and was rejected because "what deserves an email" would
+>   then live in a template string inside a Terraform resource, untestable by
+>   anything. Routed through the collector, that decision is ordinary Python
+>   with a pytest suite around it, and a broken collector is not a silent
+>   single point of failure: its own `Errors` alarm (D13) watches it directly
+>   and does not travel through the function it is watching. A second
+>   EventBridge→SNS path was rejected too — two paths to one inbox means two
+>   emails per failure, and a duplicate alert trains the recipient to filter
+>   the topic faster than a missing one does.
+> - **The ECS rule filters narrowly on the service ARN and deliberately not
+>   at all on the event name** (D4). Which `detail.eventName` values ECS
+>   emits for a *blue/green* deployment — and specifically what an
+>   alarm-triggered rollback produces — is a runtime contract with no offline
+>   source of truth. Guessing the vocabulary and filtering on it wrong would
+>   make the rollback this whole project exists to demonstrate produce no
+>   metric and no email, with the rule looking correct in the console the
+>   entire time. Filtering on nothing costs one Lambda invocation and one log
+>   line for an event the handler does not recognize, and is how the real
+>   vocabulary gets discovered — the runbook's step 8 reads it back.
+> - **Seven metric streams, six metric names, and the two DORA ratios are
+>   computed on the dashboard rather than stored** (D5). `DeploymentSucceeded`,
+>   `DeploymentFailed`, `DeploymentRolledBack`, `LeadTimeSeconds`,
+>   `RecoveryTimeSeconds` and `PipelineFailed` — six names, seven streams
+>   because `PipelineFailed` carries a two-value dimension and CloudWatch
+>   bills per unique combination (about $2.10/month while active, F10).
+>   Change failure rate and deployment frequency are not among them: a ratio
+>   stored as a metric can only ever be computed over whatever window the
+>   writer chose, never the window the reader is looking at. As dashboard
+>   metric math — `100 * failed / (failed + succeeded)`, `SUM(succeeded)` —
+>   both recompute for whatever range is dragged.
+> - **MTTR with no state store, and the ordering of two calls is what makes
+>   that true** (D7). On a success, the handler asks CloudWatch what it
+>   already wrote: one `GetMetricData` call over the last 30 days, scanned
+>   newest-first, across `DeploymentFailed` and `DeploymentSucceeded`. If the
+>   most recent failure has no success after it, this success is the
+>   recovery. That call **must** run before `DeploymentSucceeded` is written
+>   for this event, or the success just written is the one it finds and every
+>   recovery measures zero — the ordering is one line apart in the code and a
+>   test asserts it by recording call order against a fake client. No
+>   DynamoDB table, no S3 marker: the metric store is the state store, which
+>   it already had to be for the dashboard.
+> - **Three decisions earlier phases deferred by name, settled here.**
+>   Container Insights on both ECS clusters **stays disabled** (D14) — `AWS/ECS`
+>   already publishes `CPUUtilization`, `MemoryUtilization` and
+>   `RunningTaskCount` at service level for free, which is every ECS signal
+>   this dashboard shows, and Container Insights bills per metric per hour per
+>   task for per-container detail nothing here asks for. The four production
+>   bake alarms gain `alarm_actions` pointing at the alert topic (D12), which
+>   is the reason Phase 6's own test asserting their absence has to be
+>   inverted rather than deleted — Phase 6 created those alarms with no
+>   actions for the express purpose of letting this phase attach to them
+>   rather than creating parallel ones. And the Lambda module needs no
+>   dependency-bearing variant (D10, F2): `infra/modules/lambda/README.md`
+>   predicted one, but boto3 and botocore ship in the Lambda managed Python
+>   runtime, so `archive_file` over the collector's single `handler.py` still
+>   expresses the whole package and `terraform test` still really builds the
+>   zip against a mocked provider.
+> - **Phase 7's trigger gains a seventh pattern**, recorded in that phase's
+>   section above as well as here.
+>
+> **Neither exit criterion is met by the branch alone.** Both need a pipeline
+> execution against a running production service, and the Phase 9 session
+> created no AWS resource (D1). They are met by [the
+> runbook](./runbooks/phase-09-observability.md): the second — a deliberately
+> failed deployment produces an email — at step 5, which declines the
+> production approval rather than relying on an unverified `APP_SCOPE` value
+> to fail loudly; the first — a real deployment produces metrics on the
+> dashboard — at step 10, which is the one check an apply cannot perform for
+> itself, because `PutDashboard` validates a widget's structure and nothing
+> about whether a `SEARCH()` expression it contains matches anything (F8).
+>
+> §2's branch table row 9 reads `feat/Phase9_Observability`, which is the
+> branch used. **No amendment needed there** — recorded explicitly, as Phases
+> 3, 5, 6, 7 and 8 did, so the absence reads as checked rather than
+> overlooked.
+>
+> **Eleven decisions were taken during execution rather than before it**, and
+> they are recorded in [the local verification
+> record](./phases/phase9/2026-08-30-local-verification.md)'s §9, each with
+> what it costs if it turns out to be wrong. Six of the eleven were forced by a
+> defect in this project's own documents rather than by anything an
+> implementer did — including a matcher this roadmap's own plan specified that
+> could not pass the plan's own test (§9.3), and a runbook step that would have
+> tested nothing (§9.6). That ratio is the honest headline of the phase, and it
+> is recorded where a reader looking for what went wrong will find it rather
+> than only in the commit that fixed it.
 
 ### Phase 10 — Teardown and rebuild automation
 

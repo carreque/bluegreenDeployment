@@ -125,3 +125,47 @@ locals {
   # tflint-ignore: terraform_unused_declarations
   app_plan_exported_variables = ["PLAN_STATUS", "PLAN_SUMMARY", "PLAN_URL"]
 }
+
+# ---------------------------------------------------------------------------
+# Phase 9 — the observability plane
+# ---------------------------------------------------------------------------
+
+locals {
+  # Production is addressed BY NAME, never through remote state, and that is
+  # forced rather than chosen. infra/environments/prod already reads this
+  # layer's state; reading prod's back would make each layer depend on the
+  # other — and Terraform would not report it as a cycle, because the two are
+  # separate state files read at plan time. The symptom would be this layer's
+  # plan failing to read a state file `make teardown` emptied, in the layer
+  # whose whole purpose is surviving teardown. Plan §D2 and §F1.
+  #
+  # Every segment below is this layer's own convention variables. The two names
+  # that cross the boundary are pinned as string literals by
+  # infra/environments/prod/tests/outputs.tftest.hcl, so a rename over there
+  # fails there rather than silently orphaning the rule over here.
+  observability = {
+    collector_name = "${local.name_prefix}-release-metrics"
+    dashboard_name = "${local.name_prefix}-release"
+
+    prod_cluster_name = "${local.name_prefix}-prod-cluster"
+    prod_service_name = "${local.name_prefix}-prod-api"
+
+    prod_service_arn = join("", [
+      "arn:aws:ecs:${var.region}:${var.account_id}:service/",
+      "${local.name_prefix}-prod-cluster/${local.name_prefix}-prod-api",
+    ])
+
+    # Load balancer NAMES, not ARNs. The CloudWatch LoadBalancer dimension is
+    # app/<name>/<16 hex characters>, and the hex is assigned at creation — the
+    # one dimension in this dashboard the convention cannot supply. Widgets
+    # search on these instead, which also survives a teardown/rebuild giving
+    # the load balancer a new suffix. Plan §D17.
+    prod_alb_name    = "${local.name_prefix}-prod-alb"
+    staging_alb_name = "${local.name_prefix}-staging-alb"
+
+    prod_table_names = [
+      "${local.name_prefix}-prod-accounts",
+      "${local.name_prefix}-prod-transactions",
+    ]
+  }
+}

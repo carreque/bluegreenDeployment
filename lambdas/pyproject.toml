@@ -14,7 +14,7 @@ testpaths = ["tests"]
 addopts = "-q --strict-markers --strict-config --cov --cov-report=term-missing"
 
 [tool.coverage.run]
-source = ["lifecycle_hook"]
+source = ["lifecycle_hook", "release_metrics"]
 branch = true
 
 [tool.coverage.report]

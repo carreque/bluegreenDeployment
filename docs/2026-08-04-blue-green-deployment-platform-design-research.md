@@ -524,6 +524,52 @@ EventBridge rules on ECS deployment state changes and CodePipeline execution sta
 
 Surfaced on a single CloudWatch dashboard. SNS → email notifications on pipeline failure, deployment failure, and rollback.
 
+> **Amended in Phase 9 (2026-08-30).** Built as: two EventBridge rules feeding
+> one Lambda that decides what is alert-worthy, writing six metric names under
+> `ReleaseMetrics`, all argued in [the Phase 9
+> plan](./phases/phase9/2026-08-30-phase-09-implementation-plan.md)'s §0.1.
+>
+> - **The six metric names are `DeploymentSucceeded`, `DeploymentFailed`,
+>   `DeploymentRolledBack`, `LeadTimeSeconds`, `RecoveryTimeSeconds` and
+>   `PipelineFailed`** — not the four named above. **Change failure rate and
+>   deployment frequency are deliberately not among them.** Both are ratios
+>   over a time window — `100 * failed / (failed + succeeded)` and
+>   `SUM(succeeded)` — and a ratio stored as its own metric can only ever
+>   describe the window its writer chose, never the window whoever is looking
+>   at the dashboard just dragged to. Both are computed as CloudWatch metric
+>   math on the dashboard instead, from the stored counts, and recompute for
+>   whatever range is selected (D5).
+> - **Two EventBridge rules, one filtering narrowly and one barely at all.**
+>   The CodePipeline rule matches on the two pipelines' exact names and the
+>   closed set `{SUCCEEDED, FAILED}` — CodePipeline's execution states are a
+>   documented, finite vocabulary, so there is nothing to leave room for. The
+>   ECS rule matches only `source`, `detail-type` and the production service's
+>   exact ARN; it deliberately does not constrain `detail.eventName` at all,
+>   because which names ECS emits for a *blue/green* deployment — and
+>   specifically what an alarm-triggered rollback produces — is a runtime
+>   contract with no offline source of truth. Guessing that vocabulary and
+>   filtering on it wrong would make the rollback this project exists to
+>   demonstrate produce no metric and no email while the rule still looks
+>   correct in the console; filtering on nothing costs one invocation and one
+>   log line for a name the handler does not recognize, and is how the real
+>   vocabulary gets discovered (D4).
+> - **Lead time is commit-to-production where the API allows it, with a
+>   stated fallback.** The application pipeline's own execution reaching
+>   `SUCCEEDED` is the moment a change is live, so the collector reads that
+>   execution's `artifactRevisions[].created` — the source commit's timestamp
+>   — for a genuine commit-to-production number. Whether CodePipeline
+>   populates that field for a CodeConnections source cannot be confirmed
+>   without a real pipeline run, so the handler falls back to the execution's
+>   own start time (merge-to-production) when it is absent, and logs
+>   `lead_time_basis=commit` or `=merge` on every emission rather than staying
+>   silent about which one a given datapoint means (D6, F4).
+> - **The collector is the alerting decision point, not EventBridge.** A rule
+>   with an `input_transformer` targeting SNS directly would need no Lambda,
+>   and was rejected because "what deserves an email" would then live in a
+>   template string inside a Terraform resource, where nothing can test it.
+>   Routed through the collector instead, that decision is ordinary Python
+>   under a pytest suite (D3).
+
 ### 8.1 IAM
 
 Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task execution, ECS task, lifecycle Lambda, and the **ECS blue/green controller** each get their own role rather than sharing a permissive one.
@@ -641,6 +687,21 @@ Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task 
 > admit a `codeconnections:` prefix, and the next thing added under a relaxed
 > assertion is the "just one read" the assertion exists to refuse. See the
 > Phase 8 plan's D5, D6 and F13.
+
+> **Amended in Phase 9 (2026-08-30). Fifteen roles stays fifteen.** Every
+> phase since Phase 6 has added to this count, which makes a phase that does
+> not the surprising case, worth recording rather than leaving implicit.
+>
+> The release metrics collector's execution role comes from
+> `infra/modules/lambda`, the same module the three lifecycle hooks already
+> use — one `aws_iam_role` per instantiation, scoped to writing that
+> function's own log group and nothing else. The collector's extra
+> permissions — `cloudwatch:PutMetricData` and `GetMetricData`, `sns:Publish`
+> on the alert topic, `codepipeline:GetPipelineExecution` and
+> `ListPipelineExecutions` on both pipelines — are a **second policy attached
+> to that same module-created role**, not a role of its own. No new role,
+> because there is nothing here for a second role to separate: the module
+> already gives this function a role no other function shares.
 
 ---
 

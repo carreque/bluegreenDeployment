@@ -111,3 +111,32 @@ output "app_build_artifact_prefix" {
   description = "Bucket prefix holding each build's SBOM, test reports and metadata, one directory per image tag. Deliberately covered by no expiry rule (design 4.2)."
   value       = var.app_artifact_prefix
 }
+
+# ---------------------------------------------------------------------------
+# Phase 9 - the observability plane
+# ---------------------------------------------------------------------------
+
+output "release_metrics_function_name" {
+  description = "The collector. The runbook tails /aws/lambda/<this> to read which ECS event names really arrive (plan F3)."
+  value       = module.release_metrics.function_name
+}
+
+output "release_metrics_log_group_name" {
+  description = "Where the collector's decisions are recorded — including lead_time_basis, which is the only place the lead-time metric's meaning is stated (plan D6)."
+  value       = module.release_metrics.log_group_name
+}
+
+output "dashboard_name" {
+  description = "The bare name `dashboard_url` is built from and `aws cloudwatch get-dashboard --dashboard-name` needs directly; a rename here silently breaks the URL output's fragment and any script that pins the string rather than reading this output."
+  value       = aws_cloudwatch_dashboard.release.dashboard_name
+}
+
+output "dashboard_url" {
+  description = "Console deep link. Published because the runbook's verification step is 'open it and confirm every widget draws' (plan F8), and deriving this URL by hand is how that step ends up pointed at a dashboard that does not exist."
+  value       = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.release.dashboard_name}"
+}
+
+output "metric_namespace" {
+  description = "Namespace the collector writes to and every widget reads from. Published so the runbook's aws cloudwatch list-metrics call cannot be typed with a different spelling than the one deployed."
+  value       = var.metric_namespace
+}

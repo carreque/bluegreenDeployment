@@ -129,6 +129,30 @@ override_resource {
   values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-app-deploy-prod-role" }
 }
 
+# Phase 9's collector role, for the identical reason the block above states:
+# `command = apply` reaches module.release_metrics too, and
+# aws_lambda_function.this's `role` argument validates as an ARN client-side.
+# A Phase 10 role set will need the same shape of line.
+override_resource {
+  target = module.release_metrics.aws_iam_role.this
+  values = { arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-release-metrics-exec-role" }
+}
+
+override_resource {
+  target = module.release_metrics.aws_lambda_function.this
+  values = { arn = "arn:aws:lambda:us-east-1:590184028094:function:bgd-us-east-1-release-metrics" }
+}
+
+override_resource {
+  target = aws_cloudwatch_event_rule.pipeline_executions
+  values = { arn = "arn:aws:events:us-east-1:590184028094:rule/bgd-us-east-1-pipeline-executions" }
+}
+
+override_resource {
+  target = aws_cloudwatch_event_rule.prod_deployments
+  values = { arn = "arn:aws:events:us-east-1:590184028094:rule/bgd-us-east-1-prod-deployments" }
+}
+
 variables {
   project_name = "bgd"
   region       = "us-east-1"
