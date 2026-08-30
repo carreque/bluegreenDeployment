@@ -282,3 +282,32 @@ run "both_targets_bound_delivery_and_both_permissions_name_their_own_rule" {
     error_message = "both permissions must let EventBridge, and only EventBridge, invoke the collector"
   }
 }
+
+run "the_collector_is_watched_by_something_that_is_not_the_collector" {
+  command = apply
+
+  # Plan §D13. Every other alert in this phase travels through the Lambda, so
+  # this is the one that has to work when the Lambda does not.
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.release_metrics_errors.namespace == "AWS/Lambda" &&
+      aws_cloudwatch_metric_alarm.release_metrics_errors.metric_name == "Errors" &&
+      aws_cloudwatch_metric_alarm.release_metrics_errors.dimensions["FunctionName"] == module.release_metrics.function_name
+    )
+    error_message = "the watchdog must alarm on the collector's own Errors metric"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.release_metrics_errors.alarm_actions == toset([aws_sns_topic.alerts.arn])
+    error_message = "the watchdog publishes straight to the topic — its whole point is bypassing the collector"
+  }
+
+  # Load-bearing, not cosmetic, and the same reason prod's unhealthy alarms
+  # give: the collector is invoked a handful of times a week, so the metric is
+  # absent almost always and the default would park this in INSUFFICIENT_DATA
+  # permanently — an alarm that never fires and never says why.
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.release_metrics_errors.treat_missing_data == "notBreaching"
+    error_message = "an absent Errors metric is not a breach"
+  }
+}

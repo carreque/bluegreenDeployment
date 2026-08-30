@@ -188,3 +188,42 @@ resource "aws_lambda_permission" "prod_deployments" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.prod_deployments.arn
 }
+
+# --- who watches the watcher -------------------------------------------------
+#
+# Every alert this phase produces is published BY the collector, which makes a
+# broken collector silent. This is the exception: CloudWatch alarms on the
+# function's own Errors metric and publishes to the topic directly, so the one
+# failure the design cannot route through the Lambda does not have to be.
+#
+# One error in one minute is enough. This function runs a few times a week and
+# every invocation matters; there is no volume here for a threshold to smooth.
+
+resource "aws_cloudwatch_metric_alarm" "release_metrics_errors" {
+  alarm_name = "${local.observability.collector_name}-errors"
+  alarm_description = join(" ", [
+    "The release metrics collector raised. Something it needed from CloudWatch,",
+    "SNS or CodePipeline failed — which means metrics and alerts are being",
+    "lost. This alarm does not travel through the collector (plan D13).",
+  ])
+
+  namespace   = "AWS/Lambda"
+  metric_name = "Errors"
+  statistic   = "Sum"
+
+  dimensions = {
+    FunctionName = module.release_metrics.function_name
+  }
+
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  period              = 60
+  evaluation_periods  = 1
+
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+
+  # No ok_actions, matching D16: the collector recovering is not news, and this
+  # topic has one subscriber whose attention is the scarce resource.
+}

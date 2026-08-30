@@ -86,6 +86,7 @@ override_data {
       api_domain         = "api.carloscloudengineer.com"
       ecr_repository_url = "590184028094.dkr.ecr.us-east-1.amazonaws.com/bgd-us-east-1-api"
       ecr_repository_arn = "arn:aws:ecr:us-east-1:590184028094:repository/bgd-us-east-1-api"
+      alerts_topic_arn   = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts"
     }
   }
 }
@@ -493,12 +494,16 @@ run "every_alarm_can_evaluate_inside_a_five_minute_bake" {
     error_message = "the idle target group publishes nothing; without notBreaching its alarm never leaves INSUFFICIENT_DATA"
   }
 
-  # Plan §D9. These exist so ECS can roll back, not so anyone is emailed. Phase
-  # 9 owns notification, has the SNS topic in foundation already, and will
-  # attach actions to these same alarms rather than creating parallel ones.
-  # Attaching SNS here would also send mail on every deliberate demonstration in
-  # Phases 6 and 11, training the recipient to ignore the topic before it
-  # carries a real alert.
+  # Plan §D9 created these with no actions, so that Phase 9 could attach to the
+  # same alarms rather than create parallel ones. Phase 9 (D12) did. The
+  # assertion is inverted rather than deleted, because the property worth
+  # protecting is still there — it just moved from "nobody is notified" to
+  # "notification goes to the one topic this project owns, read from
+  # foundation's output rather than written out by hand".
+  #
+  # ok_actions stays empty: an alarm returning to OK during a bake is the normal
+  # end of every successful deployment, and mailing that would train the
+  # recipient to filter the topic. Phase 9 §D16.
   assert {
     condition = alltrue([
       for alarm in [
@@ -506,11 +511,9 @@ run "every_alarm_can_evaluate_inside_a_five_minute_bake" {
         aws_cloudwatch_metric_alarm.p95_latency,
         aws_cloudwatch_metric_alarm.unhealthy["blue"],
         aws_cloudwatch_metric_alarm.unhealthy["green"],
-        # null when unset, which is the shape a correct config produces; an
-        # empty set is accepted too so this cannot be "fixed" into a false pass.
-      ] : coalesce(try(length(alarm.alarm_actions), 0), 0) == 0 && coalesce(try(length(alarm.ok_actions), 0), 0) == 0
+      ] : alarm.alarm_actions == toset([local.foundation.alerts_topic_arn]) && coalesce(try(length(alarm.ok_actions), 0), 0) == 0
     ])
-    error_message = "no alarm carries actions; Phase 9 owns notification and attaches to these same alarms (plan §D9)"
+    error_message = "every bake alarm notifies the alert topic and none carries ok_actions (Phase 9 §D12, §D16)"
   }
 }
 

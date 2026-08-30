@@ -60,7 +60,7 @@ resource "aws_cloudwatch_metric_alarm" "five_xx" {
   alarm_name = "${local.env_prefix}-target-5xx"
   alarm_description = join(" ", [
     "Targets returned 5xx responses during the bake period.",
-    "Gates the blue/green bake; carries no actions by design (plan D9).",
+    "Gates the blue/green bake; notifies the alert topic (Phase 9 D12).",
     "Threshold chosen, not measured — see the runbook's step 10.",
   ])
 
@@ -83,13 +83,19 @@ resource "aws_cloudwatch_metric_alarm" "five_xx" {
   evaluation_periods  = 1
 
   treat_missing_data = "notBreaching"
+
+  # Phase 9 D12. Read from foundation's output rather than written out, so a
+  # topic that is ever recreated cannot leave four alarms pointing at an ARN
+  # that no longer resolves — which does not fail an apply and does not fail a
+  # plan; it just stops sending mail.
+  alarm_actions = [local.foundation.alerts_topic_arn]
 }
 
 resource "aws_cloudwatch_metric_alarm" "p95_latency" {
   alarm_name = "${local.env_prefix}-p95-latency"
   alarm_description = join(" ", [
     "p95 target response time exceeded the threshold during the bake period.",
-    "Gates the blue/green bake; carries no actions by design (plan D9).",
+    "Gates the blue/green bake; notifies the alert topic (Phase 9 D12).",
     "Threshold chosen, not measured — see the runbook's step 10.",
   ])
 
@@ -117,6 +123,12 @@ resource "aws_cloudwatch_metric_alarm" "p95_latency" {
   evaluation_periods = 2
 
   treat_missing_data = "notBreaching"
+
+  # Phase 9 D12. Read from foundation's output rather than written out, so a
+  # topic that is ever recreated cannot leave four alarms pointing at an ARN
+  # that no longer resolves — which does not fail an apply and does not fail a
+  # plan; it just stops sending mail.
+  alarm_actions = [local.foundation.alerts_topic_arn]
 }
 
 # --- whether either colour has a sick target ---------------------------------
@@ -129,7 +141,7 @@ resource "aws_cloudwatch_metric_alarm" "unhealthy" {
     "The ${each.key} target group has an unhealthy target.",
     "One alarm per colour because CloudWatch publishes UnHealthyHostCount per",
     "target group with no LoadBalancer-only aggregate (plan F3).",
-    "Gates the blue/green bake; carries no actions by design (plan D9).",
+    "Gates the blue/green bake; notifies the alert topic (Phase 9 D12).",
   ])
 
   namespace   = "AWS/ApplicationELB"
@@ -156,4 +168,10 @@ resource "aws_cloudwatch_metric_alarm" "unhealthy" {
   # in INSUFFICIENT_DATA — and whether ECS treats INSUFFICIENT_DATA as breaching
   # is not something to find out during a production traffic shift.
   treat_missing_data = "notBreaching"
+
+  # Phase 9 D12. Read from foundation's output rather than written out, so a
+  # topic that is ever recreated cannot leave four alarms pointing at an ARN
+  # that no longer resolves — which does not fail an apply and does not fail a
+  # plan; it just stops sending mail.
+  alarm_actions = [local.foundation.alerts_topic_arn]
 }
