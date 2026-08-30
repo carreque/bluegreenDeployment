@@ -280,6 +280,17 @@ test-lambdas: deps ## Run the Lambda handler suite
 	@cd $(LAMBDA_DIR) && $(PY) -m pytest
 
 # ---------------------------------------------------------------------------
+# Phase 10 — teardown and rebuild
+# ---------------------------------------------------------------------------
+
+# The shell suite. Pure bash: no virtualenv, no Terraform, no AWS session, and
+# no installed test framework — the scripts reach AWS only through the fake CLI
+# in scripts/tests/fake-bin. See the plan's D12.
+.PHONY: test-scripts
+test-scripts: ## Run the shell suite for scripts/ (no AWS session needed)
+	@./scripts/tests/run.sh
+
+# ---------------------------------------------------------------------------
 # Phase 8 — application pipeline
 # ---------------------------------------------------------------------------
 

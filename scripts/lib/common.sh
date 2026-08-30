@@ -247,3 +247,31 @@ plan_summary() {
   fi
   printf '%s' "$summary"
 }
+
+# ---------------------------------------------------------------------------
+# Phase 10 — layers, and the platform scope marker
+# ---------------------------------------------------------------------------
+
+# layer_dir <layer> — absolute path to a layer's root module.
+#
+# The map that tf.sh, teardown.sh and lint-infra.sh each carried a copy of, and
+# that rebuild.sh would have been the fourth to copy. tf.sh's own comment asked
+# for this. Plan §D13.
+#
+# lint-infra.sh is deliberately NOT converted: its layer_path returns a path
+# relative to infra/ and has to pass an already-relative path through unchanged,
+# which is a different contract from this one. Plan §F6.
+#
+# Errors go to stderr through die(), which matters here more than usual: this is
+# always called inside "$(...)", and a die() writing to stdout would be captured
+# into the variable being assigned and the caller would exit 1 in silence. That
+# cost real debugging time in Phase 3; see die()'s own comment above.
+layer_dir() {
+  local root
+  root="$(repo_root)"
+  case "$1" in
+    bootstrap | foundation | network) printf '%s/infra/%s\n' "$root" "$1" ;;
+    staging | prod) printf '%s/infra/environments/%s\n' "$root" "$1" ;;
+    *) die "unknown layer: $1 (expected bootstrap, foundation, network, staging or prod)" ;;
+  esac
+}

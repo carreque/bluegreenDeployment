@@ -21,17 +21,6 @@ require_cmd terraform
 
 ROOT="$(repo_root)"
 
-# Same layer-name-to-directory mapping tf.sh uses. Repeated deliberately: this
-# script needs to know whether a directory has any .tf files *before* handing
-# the layer to tf.sh, which would die on a directory that does not exist yet.
-layer_dir() {
-  case "$1" in
-    bootstrap | foundation | network) echo "$ROOT/infra/$1" ;;
-    staging | prod) echo "$ROOT/infra/environments/$1" ;;
-    *) die "unknown layer: $1" ;;
-  esac
-}
-
 TEARDOWN_ORDER=(prod staging network)
 
 echo
