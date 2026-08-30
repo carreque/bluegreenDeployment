@@ -1,4 +1,4 @@
-# infra/foundation — Phases 3, 7 and 8
+# infra/foundation — Phases 3, 7, 8 and 9
 
 Durable, effectively free, and painful to recreate. Survives every teardown.
 
@@ -68,3 +68,39 @@ must be repaired by a local `terraform apply`. The
 [Phase 7 runbook](../../docs/runbooks/phase-07-infra-pipeline.md) has that
 procedure as a step of its own, because the moment it is needed is the moment
 the pipeline cannot help.
+
+## Phase 9 — the observability plane
+
+One Lambda, two EventBridge rules, one watchdog alarm and one dashboard,
+defined in `observability.tf` and `dashboard.tf`.
+
+- **The collector** (`module.release_metrics`, function name
+  `bgd-us-east-1-release-metrics`) is invoked by the two rules below, reads
+  back the pipeline and deployment history CloudWatch already holds, and
+  writes lead time, deployment frequency, change failure rate and MTTR into
+  the `ReleaseMetrics` namespace. It can write only that namespace — the IAM
+  condition on `cloudwatch:PutMetricData` is the one lever that action offers
+  — and it can read pipeline executions but never start, stop or approve one.
+- **The pipeline-executions rule** fires on `SUCCEEDED` and `FAILED` states
+  from both the infra and the app pipeline, named rather than wildcarded.
+  **The prod-deployments rule** fires on every ECS deployment state change on
+  the production service, deliberately unfiltered by `eventName` — which name
+  a blue/green rollback emits is a runtime contract with no offline source of
+  truth, and a wrong guess would make rollbacks invisible.
+- **The dashboard** (`bgd-us-east-1-release`) is the one console tab covering
+  release health and both environments' ALB health, so "why did the pipeline
+  stop" and "is staging sick" don't need two tabs.
+- **The watchdog alarm** watches the collector's own `Errors` metric and
+  publishes to the alerts topic directly, bypassing the collector — every
+  other alert this phase produces travels through the Lambda, so this is the
+  one that still has to work when the Lambda does not.
+
+This layer owns all four, and that is forced rather than preferred: `prod`
+already reads this layer's remote state, so the mirror — this layer reading
+`prod`'s back to build the alarm actions and event pattern it needs — would
+make each layer depend on the other. Terraform would not report that as a
+cycle, because the two are separate state files read at plan time, not a
+single dependency graph. The symptom would be this layer's plan failing to
+read a state file `make teardown` emptied, in the layer whose whole purpose is
+surviving teardown. What `prod` owns instead is four lines: `alarm_actions` on
+its own bake alarms, which can only be set where the alarm is.

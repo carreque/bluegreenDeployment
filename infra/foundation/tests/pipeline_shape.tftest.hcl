@@ -345,8 +345,9 @@ run "the_trigger_filters_the_paths_the_pipeline_actually_owns" {
       "scripts/install-terraform.sh",
       "scripts/tf.sh",
       "scripts/lib/common.sh",
+      "lambdas/**",
     ])
-    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12). Narrowed from pipelines/** and scripts/pipeline-*.sh in Phase 8, because both matched that phase's files (Phase 8 §F4) — widening either back reintroduces the cross-trigger."
+    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12). Narrowed from pipelines/** and scripts/pipeline-*.sh in Phase 8, because both matched that phase's files (Phase 8 §F4) — widening either back reintroduces the cross-trigger. lambdas/** joins in Phase 9, but the gap it closes is Phase 6's, not Phase 8's or Phase 9's: infra/environments/prod/hooks.tf has packaged lambdas/lifecycle_hook/handler.py since Phase 6, and a handler-only commit changed no watched file until now — this asserting the set exactly is what makes finding that a one-line fix (Phase 9 §D18)."
   }
 
   assert {

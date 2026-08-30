@@ -629,8 +629,9 @@ run "the_infra_trigger_narrowed_when_the_app_buildspecs_arrived" {
       "scripts/install-terraform.sh",
       "scripts/tf.sh",
       "scripts/lib/common.sh",
+      "lambdas/**",
     ])
-    error_message = "tf.sh and lib/common.sh join the list here rather than as a consequence of this phase: every plan and every apply in that pipeline runs both, so by Phase 7's own D12 argument they are its executable content and always were (F4)"
+    error_message = "tf.sh and lib/common.sh join the list here rather than as a consequence of this phase: every plan and every apply in that pipeline runs both, so by Phase 7's own D12 argument they are its executable content and always were (F4). lambdas/** joins in Phase 9 but closes a Phase 6 gap, not a Phase 8 or 9 one: infra/environments/prod/hooks.tf has packaged lambdas/lifecycle_hook/handler.py since Phase 6 (Phase 9 §D18)."
   }
 }
 

@@ -28,8 +28,6 @@ locals {
     staging_latency = "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"TargetResponseTime\" ${local.observability.staging_alb_name}', 'p95', 60)"
   }
 
-  release_dimensions = ["Environment", "prod"]
-
   # Twelve widgets, in the order the plan lists them, laid out in four bands so
   # the boundary between "release process" and "environment health" is visible
   # without reading a title. Every widget carries explicit x/y/width/height —

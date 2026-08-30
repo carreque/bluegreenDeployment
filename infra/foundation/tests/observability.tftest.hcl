@@ -311,3 +311,36 @@ run "the_collector_is_watched_by_something_that_is_not_the_collector" {
     error_message = "an absent Errors metric is not a breach"
   }
 }
+
+# Every name Task 11's runbook and any later document depend on by string,
+# pinned here, so a rename fails in this layer rather than as a null lookup
+# three documents later — the same reason infra/environments/prod/tests/
+# outputs.tftest.hcl pins hook_function_names and bake_alarm_names.
+run "the_outputs_the_runbook_and_later_documents_consume_are_present" {
+  command = apply
+
+  assert {
+    condition     = output.release_metrics_function_name == "bgd-us-east-1-release-metrics"
+    error_message = "the runbook tails /aws/lambda/<this> to read which ECS event names really arrive (plan F3); a rename here must fail before it strands that step"
+  }
+
+  assert {
+    condition     = output.release_metrics_log_group_name == "/aws/lambda/bgd-us-east-1-release-metrics"
+    error_message = "the collector's decisions, including lead_time_basis, are recorded only here (plan D6)"
+  }
+
+  assert {
+    condition     = output.dashboard_name == "bgd-us-east-1-release"
+    error_message = "the single dashboard covering pipeline and application health in both environments"
+  }
+
+  assert {
+    condition     = output.dashboard_url == "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/bgd-us-east-1-release"
+    error_message = "the runbook's verification step is 'open it and confirm every widget draws' (plan F8); a hand-derived URL is how that step ends up pointed at a dashboard that does not exist"
+  }
+
+  assert {
+    condition     = output.metric_namespace == "ReleaseMetrics"
+    error_message = "the runbook's aws cloudwatch list-metrics call must not be typed with a different spelling than the one deployed"
+  }
+}

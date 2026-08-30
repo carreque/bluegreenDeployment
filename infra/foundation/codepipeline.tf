@@ -85,6 +85,20 @@ resource "aws_codepipeline" "infra" {
             "scripts/install-terraform.sh",
             "scripts/tf.sh",
             "scripts/lib/common.sh",
+
+            # lambdas/** joins in Phase 9, and — like scripts/tf.sh in Phase 8 —
+            # this is a PRE-EXISTING gap rather than a consequence of the phase
+            # that found it. infra/environments/prod/hooks.tf has packaged
+            # lambdas/lifecycle_hook/handler.py since Phase 6, and Phase 9's
+            # collector is packaged from the same directory. A commit that only
+            # fixes a handler changes no watched file, so this pipeline does not
+            # run and the fix never reaches the function that gates production.
+            # No error, no failed run: nothing happens at all. Phase 9 §D18, §F6.
+            #
+            # Seven of the eight patterns filePaths.includes accepts (§F7), so
+            # this still needs no second push block — unlike the application
+            # pipeline's eleven.
+            "lambdas/**",
           ]
         }
       }
