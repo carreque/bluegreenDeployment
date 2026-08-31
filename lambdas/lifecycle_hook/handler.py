@@ -14,6 +14,18 @@ bad: a raised exception is an unambiguous invocation error under any contract,
 whereas a returned FAILED that ECS does not parse promotes a bad build to
 production. Do not "tidy" this into a symmetric return.
 
+Plan F2 is now half retired, by real evidence from 2026-08-31. The success key
+is confirmed correct: ECS documents {"hookStatus": "SUCCEEDED" | "FAILED" |
+"IN_PROGRESS"}, lower-case, and a callBackDelay alongside IN_PROGRESS. The raise
+path is confirmed to fail CLOSED — an exception aborted the deployment and ECS
+reported "HookStatus must not be null", which is that parse failure being
+surfaced rather than a rejection being understood. So the asymmetry works but
+produces a misleading operator-facing message, and whether to replace the raise
+with a returned FAILED is a decision for Phase 11, which deliberately rejects a
+build and can therefore observe both forms. It is not changed here: this was
+found mid-incident, and a second change to the rejection path would have been
+made with no evidence for it.
+
 Standard library only. No boto3, no HTTP client dependency — which is what makes
 the deployment package one file and lets terraform test build it offline.
 """
@@ -134,7 +146,49 @@ def handler(event: object, context: object) -> dict[str, str]:
         json.dumps(event, default=str),
     )
 
-    bodies = {path: _probe(probe_url, path, _timeout_for(path, timeout)) for path in PROBE_PATHS}
+    try:
+        bodies = {
+            path: _probe(probe_url, path, _timeout_for(path, timeout)) for path in PROBE_PATHS
+        }
+    except HookRejected as rejection:
+        # BGD_ALLOW_UNSERVED exists for exactly one situation: a stage that runs
+        # BEFORE this environment serves anything, on a deployment that is
+        # CREATING the service rather than replacing a running one.
+        #
+        # PRE_SCALE_UP is that stage. It fires before green is scaled up, so on
+        # the first deployment into an empty account there are no tasks, no
+        # healthy targets, and nothing behind the production listener — the probe
+        # cannot succeed, the hook rejects, and the service can never be created.
+        # The gate that protects deployments makes the first one impossible.
+        #
+        # This is not a first-day problem that goes away. `make teardown` destroys
+        # prod and `make rebuild` applies it again from nothing, so PRE_SCALE_UP
+        # meets an unserved listener on EVERY rebuild cycle. Without this the
+        # platform's central promise — destroy when idle, rebuild on demand — is
+        # broken for production, permanently. Found 2026-08-31 on the first real
+        # prod deployment; see
+        # docs/phases/phase6/2026-08-31-pre-scale-hook-cold-start.md.
+        #
+        # Deliberately NOT set on the other two stages, and the asymmetry is the
+        # whole design. POST_TEST_TRAFFIC_SHIFT is the dark canary: it probes
+        # green on :8443 after green exists, so an unreachable endpoint there
+        # means the new revision is broken and is precisely what must block the
+        # release. POST_PRODUCTION_TRAFFIC_SHIFT probes :443 after traffic has
+        # moved, where unreachable means the shift broke production. Allowing
+        # either to pass on a failed probe would turn the two hooks that carry
+        # this project's entire safety argument into logging.
+        if os.environ.get("BGD_ALLOW_UNSERVED", "").strip().lower() != "true":
+            raise
+
+        LOGGER.info(
+            "stage=%s proceeding: %s is not serving yet (%s). "
+            "BGD_ALLOW_UNSERVED is set, so this is a create or a rebuild rather "
+            "than a rejection.",
+            stage,
+            probe_url,
+            rejection,
+        )
+        return {"hookStatus": "SUCCEEDED"}
 
     version = _decode_version(bodies["/version"])
     served_digest = version.get("image_digest", "unknown")

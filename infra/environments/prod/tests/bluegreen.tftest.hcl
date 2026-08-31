@@ -328,6 +328,38 @@ run "terraform_never_sets_the_digest_expectation" {
   }
 }
 
+run "only_the_pre_scale_hook_tolerates_an_unserved_endpoint" {
+  command = apply
+
+  # Found 2026-08-31 on the first real prod deployment. PRE_SCALE_UP runs before
+  # green is scaled up, so on a deployment that CREATES this service there is
+  # nothing behind :443 — the probe cannot succeed, the hook rejects, and ECS
+  # rolls back with "No rollback candidate was found" because a create has no
+  # previous revision. The service could never be created at all.
+  #
+  # Not a one-off: `make teardown` destroys this layer and `make rebuild` applies
+  # it from nothing, so this stage meets an unserved listener on every cycle.
+  assert {
+    condition     = module.pre_scale_hook.environment_variables.BGD_ALLOW_UNSERVED == "true"
+    error_message = "PRE_SCALE_UP must tolerate an unserved listener, or prod can never be created and `make rebuild` can never restore it"
+  }
+
+  # The other half, and the more important one. Green exists by the time the
+  # post-test hook runs, so an unreachable :8443 means the new revision does not
+  # serve — exactly what the dark canary is for. Setting this flag there would
+  # convert the gate this whole project is built to demonstrate into a log line
+  # that approves every broken build, and nothing would fail to say so.
+  assert {
+    condition = alltrue([
+      for env in [
+        module.post_test_hook.environment_variables,
+        module.post_prod_hook.environment_variables,
+      ] : !contains(keys(env), "BGD_ALLOW_UNSERVED")
+    ])
+    error_message = "BGD_ALLOW_UNSERVED must never be set on the post-test or post-production hooks; it would approve a revision that serves nothing"
+  }
+}
+
 run "the_hook_timeout_survives_a_slow_ready_probe" {
   command = apply
 

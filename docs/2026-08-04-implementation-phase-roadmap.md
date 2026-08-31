@@ -236,6 +236,34 @@ The second has a deadline the first does not. Tag activation is **not retroactiv
 > four criteria is met by the branch alone.** The branch's own gate is
 > `make tf-check`; the criteria above are met when the runbook is executed.
 
+> **Amended in execution (2026-08-31) — the zone was never adopted, and the
+> gate could not have told you.** The runbook was executed for the first time
+> and `make apply-foundation` blocked on `aws_acm_certificate_validation` for 39
+> minutes. Full record: [the zone adoption
+> defect](./phases/phase3/2026-08-31-zone-adoption-defect.md).
+>
+> - **The find-or-create matched nothing, always.** `route53.tf` compared the
+>   provider's zone name against `"${var.domain_name}."` — with a trailing dot,
+>   the spelling the Route 53 *API* uses. The *provider* normalises it away.
+>   `zone_exists` was therefore false on every plan since Phase 3, and the
+>   create path ran on an account that already held a correctly delegated zone.
+>   Two hosted zones for one domain, both ACM validation CNAMEs written into the
+>   one nobody delegates to, and a certificate that could never validate.
+> - **`make tf-check` was green throughout, on a tautology.** The test mocked
+>   the data source with the dotted name, so the adopt assertion passed against a
+>   value the provider never produces. This is the part worth carrying forward:
+>   **a mock is evidence only to the extent that it matches what it replaces, and
+>   nothing in an offline gate can tell you when it stops doing so.** Four phases
+>   ran this gate and none of them could have caught it.
+> - **The fix trims both sides**, so a provider that normalises the other way
+>   later does not reintroduce it from the opposite direction, and a second mock
+>   asserts the dotted spelling adopts too. Verified by restoring the old matcher
+>   and watching the corrected test fail.
+> - **Phase 0's A3 finding is correct and is not amended.** The zone existed, was
+>   delegated, and resolved publicly. What a verification phase cannot establish
+>   is whether the code that consumes its answer can act on it — see §4's risk
+>   table, where the risk A3 retired is reinstated.
+
 ### Phase 4 — Network layer
 
 - VPC across two availability zones; public subnets for the ALBs, private subnets for Fargate tasks.
@@ -406,6 +434,45 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > used. **No amendment needed there** — recorded explicitly, as Phases 3 and 5
 > did, so the absence reads as checked rather than overlooked.
 
+> **Amended in execution (2026-08-31) — the PRE_SCALE_UP hook made the first
+> production deployment impossible.** Full record: [the pre-scale hook cold
+> start](./phases/phase6/2026-08-31-pre-scale-hook-cold-start.md).
+>
+> - **The gate blocked the only deployment that could satisfy it.**
+>   `PRE_SCALE_UP` fires before green is scaled up, and it probes `:443`. On a
+>   deployment that *creates* the service nothing is behind that listener, so the
+>   probe got `Connection refused`, the hook rejected, and ECS rolled back — with
+>   `No rollback candidate was found`, because a create has no previous revision.
+>   Three hops separated the Terraform error from the cause: the Terraform
+>   message, the service event stream, and the Lambda's own log. **An ECS
+>   blue/green failure is not diagnosable from the Terraform error alone**, which
+>   the operational runbook in Phase 11 should say.
+> - **This was not a first-day problem, and that is what makes it serious.**
+>   `make rebuild` applies `prod` from nothing on every teardown cycle, so this
+>   stage meets an unserved listener *every* cycle. Production could be created
+>   zero times, and **Phase 10's exit criterion was unreachable** — its runbook
+>   would have failed at the same point. Roadmap §4 predicts that
+>   teardown-and-rebuild cycles surface latent IaC gaps and calls fixing them in
+>   scope; this is that, found by a pipeline one phase early.
+> - **`BGD_ALLOW_UNSERVED` is set on the pre-scale hook and on no other**, and
+>   the asymmetry is the whole design. On `POST_TEST_TRAFFIC_SHIFT` it would turn
+>   the dark canary — the mechanism this entire project exists to demonstrate —
+>   into a log line that approves every broken build. A test asserts its presence
+>   on one hook and its absence on the other two, from opposite ends, in the
+>   pattern that file already uses for `BGD_PROBE_URL`.
+> - **Plan §F2 is half retired by real evidence.** `{"hookStatus": "SUCCEEDED"}`
+>   is confirmed correct — lower-case, per AWS's documented
+>   `SUCCEEDED | FAILED | IN_PROGRESS`. `HookStatus must not be null` was ECS
+>   reporting an *exception payload with no status*, not a casing complaint. The
+>   raise path is confirmed to fail closed. Whether to replace it with a returned
+>   `FAILED` is left to Phase 11, which rejects a build deliberately and can
+>   observe both forms — deliberately not decided mid-incident.
+> - **The third exit criterion is closer than it looks.** *A deliberately failing
+>   hook aborts the deployment with zero production traffic shifted* was
+>   demonstrated accidentally and completely: a hook rejected, the deployment
+>   aborted, and no traffic moved. What it did not demonstrate is the intended
+>   version of it, on a deployment that could otherwise have succeeded.
+
 ### Phase 7 — Infrastructure pipeline
 
 - CodePipeline v2 sourced from `carreque/bluegreenDeployment` via CodeConnections, filtered to `infra/**` on `main`.
@@ -575,6 +642,42 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > `scripts/lib/common.sh` — are already matched, and the three operator scripts
 > are not pipeline content: no stage runs them, so a change to one changes
 > nothing about what a run does.
+
+> **Amended in execution (2026-08-31) — Validate could not install its own
+> linter, and the trigger did not watch the script that installs it.** Full
+> record: [the tflint ruleset
+> install](./phases/phase7/2026-08-31-tflint-ruleset-install.md).
+>
+> - **`tflint --init` resolves its ruleset through `api.github.com`**, which
+>   allows 60 unauthenticated requests per hour **per source IP**. On a laptop
+>   that budget is private and the plugin directory persists, so it is paid once
+>   and never again; in CodeBuild the workspace is fresh every build and the IP
+>   is a shared AWS NAT address whose 60 requests belong to every AWS customer
+>   behind it. The first real pipeline run failed Validate with `403 API rate
+>   limit exceeded` after every `terraform test` in the same build had passed.
+>   The command had been green on the development machine for five phases and was
+>   never going to be reliable in the pipeline.
+> - **The fix downloads the release asset directly** — assets are served by a CDN
+>   and carry no such limit — and places it where tflint already looks, so
+>   `tflint --init` is gone and the lint makes **no network call at all** once the
+>   plugin is present. A `GITHUB_TOKEN` would also have worked and was rejected:
+>   a credential to store and rotate, plus a **fourth** irreducibly manual step in
+>   a project that states there are exactly three.
+>   `ghcr.io/terraform-linters/tflint-bundle` was rejected on inspection — its
+>   plugin directory is dated September 2023 and `latest` has not been rebuilt
+>   since.
+> - **The side effect is a property these documents already claimed.**
+>   `make tf-check` is described throughout as needing no AWS session; it also
+>   quietly needed GitHub, and now does not.
+> - **The trigger gains an eighth pattern, `scripts/lint-infra.sh`**, and this is
+>   the **third** pre-existing gap of the shape Phase 8 found in `scripts/tf.sh`
+>   and Phase 9 found in `lambdas/**`: a file becomes the pipeline's executable
+>   content the moment a stage runs it, and nothing connects that moment to the
+>   trigger list. Each was found only when somebody finally edited the file —
+>   which is the worst moment, because the edit is usually the fix.
+>   **Eight is the maximum `filePaths.includes` accepts**, so the next such gap
+>   needs a second `push` block rather than a line. Both copies of the
+>   pattern-set assertion were updated in the same commit, as Phase 9's were.
 
 ### Phase 8 — Application pipeline
 
@@ -959,9 +1062,13 @@ The design document's risk table (§11) still stands. These are added or changed
 | Risk | Handling |
 |---|---|
 | **Lambda may not offer a Python 3.14 managed runtime** | Verified in Phase 0 before anything depends on it. Falls back to the newest available runtime, documented as a deliberate divergence from the container's 3.14. |
-| **Hosted zone may already exist from Route 53 registration** | Verified in Phase 0. If it exists, Terraform adopts it and the two-phase apply never occurs. If Terraform creates it, the registrar's name servers must be updated to the new zone's before ACM validation can succeed. |
+| **Hosted zone may already exist from Route 53 registration** | ~~Verified in Phase 0. If it exists, Terraform adopts it and the two-phase apply never occurs.~~ **Reinstated 2026-08-31: this fired.** Phase 0 verified correctly that the zone existed and was delegated, and the risk was closed on that answer. What nobody verified was whether the code could *act* on it — a trailing-dot mismatch made the adopt path unreachable, so Terraform created a second zone and ACM validation hung, exactly as the original risk described. Now genuinely closed: the matcher is fixed and two mocks assert both spellings. See [the defect record](./phases/phase3/2026-08-31-zone-adoption-defect.md). |
+| **A verification finding can be right while the code that consumes it is wrong** | New, and generalised from the row above rather than confined to it. A Phase 0 answer establishes a fact about the account; it does not establish that the configuration reading that fact parses it the way the provider returns it. Where a finding retires a risk, the retirement is only as good as a test that exercises the real provider — and a mocked one cannot supply that. |
+| **A green offline gate can be green on a tautology** | New. `make tf-check` passed for four phases on a mock whose value the provider never produces. Mitigation is not more mocks: it is that every mocked value which mirrors a real API response gets recorded with the date and provider version it was checked against, so a stale fixture is visible rather than inferred. |
+| **A file becomes pipeline content without joining the trigger** | Found three times — `scripts/tf.sh` (Phase 8), `lambdas/**` (Phase 9), `scripts/lint-infra.sh` (2026-08-31). Each surfaced only when somebody finally edited the file. The trigger is now at `filePaths.includes`'s eight-pattern maximum, so the next occurrence costs a second `push` block rather than a line. |
 | **The infra pipeline manages the layer containing itself** | Expected. A broken pipeline definition is repaired by a local `terraform apply`; the runbook documents this. |
-| **Repeated teardown and rebuild cycles surface latent IaC gaps** | This is the point of Phase 10 rather than a risk to avoid. Gaps found there are bugs in the IaC, and fixing them is in scope. |
+| **Repeated teardown and rebuild cycles surface latent IaC gaps** | This is the point of Phase 10 rather than a risk to avoid. Gaps found there are bugs in the IaC, and fixing them is in scope. **Fired 2026-08-31, before any cycle ran:** the `PRE_SCALE_UP` hook made creating the prod service impossible, so `make rebuild` could never have restored production. Found by the application pipeline rather than by a teardown, which is luck — a cycle would have found it, one phase later, with the environment already destroyed. |
+| **A gate can be unsatisfiable on the path that creates the thing it guards** | New, and generalised from the row above. A check written for the steady state — "is production healthy?" — may have no valid answer at creation time, when the thing being checked does not exist yet. It fails closed, which is correct behaviour producing an impossible outcome. Every hook, alarm and health gate is worth re-reading with "what does this return when the environment is empty?" in mind, because destroy-when-idle means the empty case is routine here rather than exceptional. |
 | **ACM certificate is in `foundation`, ALBs are in the environment layers** | The certificate outlives teardown, so listeners reference it through remote state. No re-issuance on rebuild. |
 
 ---

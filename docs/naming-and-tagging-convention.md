@@ -288,6 +288,37 @@ User-defined tags do nothing in Cost Explorer until they are activated under
    backfill.
 3. Terraform cannot do it. No provider resource covers it.
 
+> **Amended in execution (2026-08-31).** There is a fourth consequence, and it
+> changes *when* this step happens rather than merely how.
+>
+> **Point 1 understates the wait.** "After AWS has observed it" is not "after the
+> apply": Billing discovers user-defined keys on its own schedule — typically up
+> to ~24 hours after it first bills a resource carrying them. Immediately after
+> `make apply-foundation` the four keys are **absent** from the console list and
+> from `aws ce list-cost-allocation-tags`, so there is nothing to activate. This
+> step cannot be completed in the same session as the apply that enables it, and
+> the Phase 3 runbook now says so.
+>
+> Combined with point 2, some hours of spend are unattributable no matter what
+> anyone does. That is inherent to the mechanism, not a mistake by whoever ran
+> the apply, and it is worth writing down so nobody later reads the gap in Cost
+> Explorer as evidence the step was skipped.
+>
+> **§4's case-sensitivity warning is load-bearing in this console.** The
+> user-defined list in this account runs to 82 keys across seven pages and
+> includes `Environment`, `ManagedBy`, `Name` and `Project` from an earlier EKS
+> workload. None of them is this project's. Ticking them activates real keys
+> belonging to something else and attributes none of this project's spend, with
+> no error and a success message. Prefer the API to the console:
+>
+> ```bash
+> aws ce update-cost-allocation-tags-status --cost-allocation-tags-status \
+>   TagKey=environment,Status=Active \
+>   TagKey=projectName,Status=Active \
+>   TagKey=region,Status=Active \
+>   TagKey=owner,Status=Active
+> ```
+
 ### 6.3 Timeline
 
 | When | Action | Why then |

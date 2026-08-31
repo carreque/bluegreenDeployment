@@ -103,6 +103,29 @@ ResourceRecordSetCount   2
 - Phase 3 takes the **adopt** path. Terraform's find-or-create (design §1.7) matches the existing zone and creates nothing.
 - `wait_for_validation` can be **`true` on the first apply**. The two-phase apply never happens, and no name servers need updating at the registrar.
 - **Design §11's risk "ACM validation hangs on the zone-create path" is retired.** So is roadmap §4's equivalent row.
+
+> **Amended in execution (2026-08-31) — that retirement was wrong, and the
+> finding above was right.** Everything A3 establishes is accurate and stands:
+> the zone existed, was delegated, and resolved publicly, and it is the same zone
+> (`Z01311493LQ7UOIRHM1H9`) in use today.
+>
+> What A3 could not establish, and did not claim to, is whether the code
+> consuming that answer could act on it. It could not: `route53.tf` matched the
+> zone name against a trailing dot the aws provider does not return, so the adopt
+> path was unreachable and the create path ran on the first real apply — producing
+> the second zone, the undelegated validation records and the 75-minute hang that
+> this bullet declared impossible. Roadmap §4's row is **reinstated and then
+> genuinely closed**; see [the defect
+> record](../phase3/2026-08-31-zone-adoption-defect.md).
+>
+> The transferable lesson is about the shape of the claim rather than this
+> particular bug. **A verification phase establishes facts about the world; it
+> does not establish that the configuration reading those facts parses them the
+> way the provider returns them.** A finding may therefore justify *choosing* a
+> path, but it cannot on its own retire the risk attached to the other path —
+> only a test exercising the real provider can do that, and a mocked one cannot.
+> Every remaining "retired" claim in this document is worth re-reading with that
+> distinction in mind.
 - No ACM certificates exist in `us-east-1` yet (`aws acm list-certificates` returned `[]`), so Phase 3 issues the first one.
 
 ### New risk found here

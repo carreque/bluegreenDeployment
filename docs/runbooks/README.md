@@ -64,3 +64,12 @@ Two of the three have no deadline. Tag activation does: a key only becomes
 activatable once AWS has seen it on a real resource, so it cannot be done
 earlier, and it is not retroactive, so every day of delay is spend that stays
 permanently unattributed.
+
+> **Amended in execution (2026-08-31).** Tag activation also cannot be done
+> *immediately*, which no document said. Billing discovers user-defined keys on
+> its own schedule — up to ~24 hours after it first bills a tagged resource — so
+> right after the foundation apply there is nothing in the list to activate. It
+> is still one of the three manual steps and still the one with a deadline; it
+> simply belongs to the session **after** the one that creates the resources.
+> The Phase 3 runbook's step 6 carries the poll command and the API form that
+> cannot select the wrong capitalisation.

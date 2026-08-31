@@ -43,6 +43,21 @@ locals {
     pre_scale = {
       BGD_STAGE     = "PRE_SCALE_UP"
       BGD_PROBE_URL = "https://${local.foundation.api_domain}"
+
+      # This stage runs BEFORE green is scaled up, so on a deployment that
+      # creates the service there is nothing behind :443 to probe — no tasks, no
+      # healthy targets. Without this the hook rejects, the deployment rolls back
+      # with "No rollback candidate was found" (there is no previous revision on
+      # a create), and the service can never be created at all.
+      #
+      # Not a first-day problem: `make teardown` destroys this layer and
+      # `make rebuild` recreates it, so PRE_SCALE_UP meets an unserved listener
+      # on every cycle. Found 2026-08-31 on the first real prod deployment.
+      #
+      # On THIS stage only. The other two probe after the thing they are
+      # checking exists, and for them an unreachable endpoint is the finding
+      # rather than a precondition — see the comment on post_test below.
+      BGD_ALLOW_UNSERVED = "true"
     }
 
     post_test = {
@@ -51,6 +66,12 @@ locals {
       # hook would validate the colour that is already serving and approve every
       # bad build — the worst failure this layer can have, and the reason two
       # tests assert it from opposite ends.
+      #
+      # BGD_ALLOW_UNSERVED must never appear here. Green exists by the time this
+      # runs, so an unreachable :8443 means the new revision does not serve —
+      # exactly what the dark canary is for. Setting it would convert this gate
+      # into a log line and approve every broken build, silently. A test asserts
+      # its absence for that reason.
       BGD_PROBE_URL = "https://${local.foundation.api_domain}:8443"
     }
 

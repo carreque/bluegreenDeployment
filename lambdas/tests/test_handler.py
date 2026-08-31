@@ -102,6 +102,7 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BGD_STAGE", "POST_TEST_TRAFFIC_SHIFT")
     monkeypatch.delenv("BGD_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("BGD_EXPECT_DIGEST", raising=False)
+    monkeypatch.delenv("BGD_ALLOW_UNSERVED", raising=False)
 
 
 def _run(fake: _FakeUrlopen) -> dict[str, str]:
@@ -312,3 +313,96 @@ def test_a_trailing_slash_on_the_probe_url_does_not_double(monkeypatch: pytest.M
     _run(fake)
 
     assert fake.paths == ["/health", "/ready", "/version"]
+
+
+# ---------------------------------------------------------------------------
+# BGD_ALLOW_UNSERVED — the cold-start escape, and its blast radius
+#
+# PRE_SCALE_UP runs before green is scaled up. On a deployment that CREATES the
+# service there is nothing behind the listener, so the probe cannot succeed and
+# the hook would reject the only deployment that could ever populate it. That is
+# not a first-day problem: `make rebuild` recreates prod from nothing on every
+# teardown cycle. Found 2026-08-31 on the first real prod deployment.
+#
+# The flag is set on PRE_SCALE_UP alone. These tests fix both halves: that it
+# works where it is set, and that it changes nothing where it is not.
+# ---------------------------------------------------------------------------
+
+
+def test_unreachable_endpoint_passes_when_unserved_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cold-start case: nothing is listening yet, and the deployment proceeds."""
+    monkeypatch.setenv("BGD_STAGE", "PRE_SCALE_UP")
+    monkeypatch.setenv("BGD_ALLOW_UNSERVED", "true")
+
+    fake = _healthy(**{"/health": urllib.error.URLError("Connection refused")})
+
+    assert _run(fake) == {"hookStatus": "SUCCEEDED"}
+
+
+def test_unreachable_endpoint_still_raises_without_the_flag() -> None:
+    """The default, and what the other two stages rely on.
+
+    Identical to the case above except for the flag. If this ever passes, the
+    dark canary has been turned into a log line.
+    """
+    fake = _healthy(**{"/health": urllib.error.URLError("Connection refused")})
+
+    with pytest.raises(HookRejected):
+        _run(fake)
+
+
+def test_allow_unserved_also_covers_an_endpoint_that_answers_badly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deliberate, and worth stating rather than discovering.
+
+    With the flag set, a 500 from the CURRENT production does not block the
+    deployment either. That is the intended reading of PRE_SCALE_UP: this stage
+    describes what production looked like before the release, and refusing to
+    deploy because production is unhealthy is backwards — the release may be the
+    fix. The stages that gate on health are the two that run after green exists.
+    """
+    monkeypatch.setenv("BGD_STAGE", "PRE_SCALE_UP")
+    monkeypatch.setenv("BGD_ALLOW_UNSERVED", "true")
+
+    fake = _healthy(**{"/health": _Response(500, b"")})
+
+    assert _run(fake) == {"hookStatus": "SUCCEEDED"}
+
+
+@pytest.mark.parametrize("value", ["false", "False", "1", "yes", "", " "])
+def test_only_the_literal_true_enables_it(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Anything other than "true" leaves the gate closed.
+
+    A flag that enables itself on any non-empty string is one typo away from
+    disarming the hook it is not supposed to touch.
+    """
+    monkeypatch.setenv("BGD_ALLOW_UNSERVED", value)
+
+    fake = _healthy(**{"/health": urllib.error.URLError("Connection refused")})
+
+    with pytest.raises(HookRejected):
+        _run(fake)
+
+
+def test_allow_unserved_does_not_suppress_a_digest_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flag covers probe failures only, never the verdict on what is served.
+
+    If the endpoint answers, every assertion past the probe still applies —
+    otherwise setting this on PRE_SCALE_UP would quietly disable exit
+    criterion 3's mechanism on that stage.
+    """
+    monkeypatch.setenv("BGD_STAGE", "PRE_SCALE_UP")
+    monkeypatch.setenv("BGD_ALLOW_UNSERVED", "true")
+    monkeypatch.setenv("BGD_EXPECT_DIGEST", "sha256:deadbeef")
+
+    with pytest.raises(HookRejected) as rejection:
+        _run(_healthy())
+
+    assert "deadbeef" in str(rejection.value)

@@ -88,12 +88,38 @@ make plan-foundation
 **Stop and read two things in this plan.**
 
 **First: the zone must be adopted, not created.** The plan should contain **no**
-`aws_route53_zone.this` resource at all. If it shows one being created, the
-account does not hold the zone Phase 0 found — do not apply. Investigate with
-`aws route53 list-hosted-zones-by-name --dns-name carloscloudengineer.com`
-before going further, because creating a second zone for a delegated domain
-produces a zone whose name servers nobody points at, and the certificate
-validation in this same apply will then hang for 75 minutes before failing.
+`aws_route53_zone.this` resource at all. If it shows one being created, **do not
+apply** — creating a second zone for a delegated domain produces a zone whose
+name servers nobody points at, and the certificate validation in this same apply
+will then hang for 75 minutes before failing.
+
+> **This happened on 2026-08-31, and the cause was not the account.** The zone
+> was present and correctly delegated exactly as Phase 0 found it; the matcher in
+> `route53.tf` compared against a trailing dot the provider does not return, so
+> the adopt path was unreachable. It is fixed — but the instruction above is the
+> check that would have caught it in fifteen seconds, and it was not performed.
+> **Read this plan. The zone line is the reason this step says "stop and read
+> two things" rather than "run these two commands."** Full record: [the zone
+> adoption defect](../phases/phase3/2026-08-31-zone-adoption-defect.md).
+
+Confirm the account's side independently, so a green plan is not the only
+evidence — there must be exactly **one** zone, and its name servers must match
+the registrar's:
+
+```bash
+aws route53 list-hosted-zones-by-name --dns-name carloscloudengineer.com \
+  --query 'HostedZones[].[Id,Name,Config.Comment]' --output table
+
+diff <(aws route53domains get-domain-detail --region us-east-1 \
+        --domain-name carloscloudengineer.com \
+        --query 'sort(Nameservers[].Name)' --output text) \
+     <(aws route53 get-hosted-zone --id "$(terraform -chdir=infra/foundation output -raw zone_id)" \
+        --query 'sort(DelegationSet.NameServers)' --output text) \
+  && echo "delegation matches"
+```
+
+Two zones for one domain, or a `diff` that prints anything, means the apply
+adopted the wrong one — stop and read the defect record above.
 
 **Second: the certificate names.** `api.carloscloudengineer.com` as the primary
 and `staging-api.carloscloudengineer.com` as the SAN.
@@ -178,16 +204,66 @@ that point it looks like a bug in the alerting rather than an unclicked link.
 cost allocation tags → select `environment`, `projectName`, `region`, `owner` →
 **Activate**.
 
-Three facts about this step, in the order that matters:
+Four facts about this step, in the order that matters:
 
 1. It **cannot be done earlier**. A tag key only becomes activatable once AWS
    has observed it on a real resource, and this apply created the first ones.
-2. It is **not retroactive**. Cost recorded before activation is permanently
-   unattributed, and there is no backfill.
-3. Terraform **cannot do it**. No provider resource covers tag activation.
+2. It **cannot be done now either.** *(Added 2026-08-31, on the first real
+   execution.)* Billing discovers user-defined keys on its own schedule —
+   typically up to ~24 hours after it first bills a resource carrying them — so
+   immediately after this apply the four keys are simply **absent** from the
+   console list and from the API. There is nothing to tick. This step therefore
+   belongs to the **next** session, not this one, and the sentence "delay costs
+   nothing in schedule" below is true but was never the whole story.
+3. It is **not retroactive**. Cost recorded before activation is permanently
+   unattributed, and there is no backfill. Combined with (2), some hours are
+   unattributable no matter what anyone does; that is inherent, not a mistake.
+4. Terraform **cannot do it**. No provider resource covers tag activation.
 
-So delay costs nothing in schedule and everything in data. Activation itself
-takes up to 24 hours to appear in Cost Explorer; that lag is normal.
+Activation itself then takes up to 24 hours to appear in Cost Explorer; that lag
+is separate from (2) and additional to it.
+
+**The keys are case-sensitive, and this account holds another workload's tags.**
+The console list is long and contains `Environment`, `ManagedBy`, `Name` and
+`Project` — from an earlier EKS workload, and **none of them is this project's**.
+`environment` and `Environment` are two different tags
+([the convention, §6](../naming-and-tagging-convention.md#6-when-the-tags-actually-take-effect)).
+Ticking the capitalised set attributes nothing and looks like success.
+
+So do it by API rather than by eye. First confirm the tags really are on the
+resources — this works immediately, unlike the Billing list:
+
+```bash
+aws ecr list-tags-for-resource \
+  --resource-arn arn:aws:ecr:us-east-1:590184028094:repository/bgd-us-east-1-api \
+  --query 'tags' --output table
+```
+
+Then poll until Billing has discovered them:
+
+```bash
+aws ce list-cost-allocation-tags --output table \
+  --query 'CostAllocationTags[?TagKey==`environment`||TagKey==`projectName`||TagKey==`region`||TagKey==`owner`].[TagKey,Status]'
+```
+
+Empty means not yet — come back next session. When four rows appear, activate
+them in one command, with no opportunity to pick the wrong case:
+
+```bash
+aws ce update-cost-allocation-tags-status --cost-allocation-tags-status \
+  TagKey=environment,Status=Active \
+  TagKey=projectName,Status=Active \
+  TagKey=region,Status=Active \
+  TagKey=owner,Status=Active
+```
+
+Re-run the poll; all four must read `Active`. Running the activate command
+before the keys are discovered does **not** queue anything — it returns a
+per-key error and changes nothing.
+
+**A teardown does not reset this clock.** `foundation` survives `make teardown`,
+and its ECR repository, artifact bucket, SNS topic and hosted zone all carry the
+four tags, so discovery proceeds whether or not the environments are up.
 
 See [the naming and tagging convention, §6](../naming-and-tagging-convention.md#6-when-the-tags-actually-take-effect).
 

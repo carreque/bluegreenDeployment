@@ -93,7 +93,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_task" {
   for_each = local.environments
 
   security_group_id            = aws_security_group.alb[each.key].id
-  description                  = "Container port on this environment's tasks, health checks included"
+  description                  = "Container port on the tasks in this environment, health checks included"
   referenced_security_group_id = aws_security_group.task[each.key].id
   from_port                    = var.container_port
   to_port                      = var.container_port
@@ -106,7 +106,7 @@ resource "aws_vpc_security_group_ingress_rule" "task_from_alb" {
   for_each = local.environments
 
   security_group_id            = aws_security_group.task[each.key].id
-  description                  = "Container port from this environment's ALB only"
+  description                  = "Container port from the ALB in this environment only"
   referenced_security_group_id = aws_security_group.alb[each.key].id
   from_port                    = var.container_port
   to_port                      = var.container_port

@@ -99,6 +99,25 @@ resource "aws_codepipeline" "infra" {
             # this still needs no second push block — unlike the application
             # pipeline's eleven.
             "lambdas/**",
+
+            # scripts/lint-infra.sh joins on 2026-08-31, and this is the THIRD
+            # pre-existing gap of the same shape — after scripts/tf.sh in Phase 8
+            # and lambdas/** in Phase 9. Every Validate stage runs this script,
+            # so by D12's own argument it is this pipeline's executable content
+            # and always was. It went unnoticed because the file had not changed
+            # since Phase 3; it changed on the first real pipeline run, when
+            # `tflint --init` turned out to resolve its ruleset through
+            # api.github.com and hit that endpoint's per-IP rate limit from
+            # CodeBuild's shared NAT address. See
+            # docs/phases/phase7/2026-08-31-tflint-ruleset-install.md.
+            #
+            # This is the EIGHTH pattern, which is the documented maximum
+            # filePaths.includes accepts (§F7). A ninth needs a second push
+            # block, each repeating the branch filter — the shape the
+            # application pipeline already uses for its eleven. Worth knowing
+            # before the next gap of this kind is found, because there is now no
+            # room to close one by adding a line.
+            "scripts/lint-infra.sh",
           ]
         }
       }

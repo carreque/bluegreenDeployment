@@ -75,11 +75,108 @@ tflint_run() {
     "$TFLINT" "$@"
 }
 
-# The tflint image ships no rulesets. Without a mounted plugin directory the AWS
-# ruleset is re-downloaded on every invocation, and a network failure then fails
-# the lint run rather than the download.
-info "tflint — installing rulesets"
-tflint_run --init >/dev/null
+# ---------------------------------------------------------------------------
+# The AWS ruleset, installed WITHOUT `tflint --init`.
+#
+# The tflint image ships no rulesets, so one has to be fetched. `--init` is the
+# obvious way and is what this script used until 2026-08-31 — but it resolves
+# the release through **api.github.com**, which allows 60 unauthenticated
+# requests per hour PER SOURCE IP.
+#
+# On a laptop that budget is private and $PLUGINS persists between runs, so the
+# call is made once and never again. In CodeBuild both halves of that are
+# false: the workspace is fresh on every build, so `--init` runs every time,
+# and the source IP is a shared AWS NAT address whose 60 requests belong to
+# every AWS customer sitting behind it. The result is a 403 at random —
+#
+#   Failed to fetch GitHub releases: 403 API rate limit exceeded for
+#   34.228.4.223 (rate reset in 25m20s)
+#
+# — which fails Validate, and therefore the whole infra pipeline, for a reason
+# that has nothing to do with the code being linted. Observed on the first real
+# pipeline run; see docs/phases/phase7/2026-08-31-tflint-ruleset-install.md.
+#
+# Release ASSETS are served by a CDN and carry no such limit, so the asset is
+# downloaded directly and placed where tflint looks for it. tflint then finds an
+# installed plugin and makes no network call at all — which also means the lint
+# runs fully offline once the plugin is present, on the laptop and in CodeBuild
+# alike. A GITHUB_TOKEN would also have fixed it, and was rejected: it is a
+# secret to store and rotate, and creating it is a fourth irreducibly manual
+# step in a project whose documents claim there are exactly three.
+#
+# The version is read from .tflint.hcl rather than repeated here — that file is
+# what tflint enforces, so a second copy could disagree with it. The checksums
+# cannot be derived, so they are pinned, and the guard below refuses a version
+# they were not recorded for rather than letting the mismatch surface as a
+# confusing checksum failure.
+#
+# Re-record both lines together with:
+#   curl -sS https://github.com/terraform-linters/tflint-ruleset-aws/releases/download/v<version>/checksums.txt
+# ---------------------------------------------------------------------------
+
+require_cmd curl
+require_cmd unzip
+
+# macOS ships shasum, Linux ships sha256sum, and this script runs on both.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+RULESET_VERSION="$(sed -n '/plugin "aws"/,/^}/s/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+  "$INFRA/.tflint.hcl" | head -1)"
+[[ -n "$RULESET_VERSION" ]] ||
+  die "could not read the aws ruleset version from infra/.tflint.hcl"
+
+CHECKSUMS_RECORDED_FOR="0.44.0"
+[[ "$RULESET_VERSION" == "$CHECKSUMS_RECORDED_FOR" ]] ||
+  die "infra/.tflint.hcl pins aws ruleset $RULESET_VERSION but the checksums here were recorded for $CHECKSUMS_RECORDED_FOR — re-record them together"
+
+PLUGIN_DIR="$PLUGINS/github.com/terraform-linters/tflint-ruleset-aws/$RULESET_VERSION"
+PLUGIN_BIN="$PLUGIN_DIR/tflint-ruleset-aws"
+
+if [[ -x "$PLUGIN_BIN" ]]; then
+  ok "aws ruleset $RULESET_VERSION already installed"
+else
+  # The plugin is a native binary run BY the container, so it must match the
+  # container's architecture, not the host's. Those differ routinely here:
+  # Docker Desktop on Apple silicon runs this image as arm64 while CodeBuild's
+  # LINUX_CONTAINER is amd64 (Phase 7 §D7). Asking the image itself is the only
+  # answer that is right in both places.
+  container_arch="$(docker run --rm --entrypoint uname "$TFLINT" -m | tr -d '[:space:]')"
+  case "$container_arch" in
+    x86_64 | amd64)
+      asset="linux_amd64"
+      expected_sha256="2257966e97ef08fd55ef460b054ed46aa8b7196b094e15edeb45ac8f7213df2d"
+      ;;
+    aarch64 | arm64)
+      asset="linux_arm64"
+      expected_sha256="bc595e871fd1df0c7cba1efb73e16aaaebb623b290ecfcc64af0f22cc42d1ff3"
+      ;;
+    *) die "unsupported tflint container architecture '$container_arch'" ;;
+  esac
+
+  info "tflint — installing the aws ruleset $RULESET_VERSION ($asset)"
+
+  workdir="$(mktemp -d)"
+  trap 'rm -rf "$workdir"' EXIT
+
+  curl -fsSL --retry 3 --retry-delay 2 -o "$workdir/ruleset.zip" \
+    "https://github.com/terraform-linters/tflint-ruleset-aws/releases/download/v${RULESET_VERSION}/tflint-ruleset-aws_${asset}.zip"
+
+  unzip -q -o "$workdir/ruleset.zip" -d "$workdir"
+
+  actual_sha256="$(sha256_of "$workdir/tflint-ruleset-aws")"
+  [[ "$actual_sha256" == "$expected_sha256" ]] ||
+    die "checksum mismatch for tflint-ruleset-aws_${asset} — expected $expected_sha256, got $actual_sha256"
+
+  mkdir -p "$PLUGIN_DIR"
+  install -m 0755 "$workdir/tflint-ruleset-aws" "$PLUGIN_BIN"
+  ok "aws ruleset $RULESET_VERSION installed"
+fi
 
 failures=0
 
