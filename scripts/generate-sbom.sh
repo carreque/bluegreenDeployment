@@ -21,7 +21,13 @@ require_cmd jq
 
 ROOT="$(repo_root)"
 DIST="$ROOT/app/dist"
-SYFT="anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0"
+# ghcr.io, not Docker Hub, and the digest is UNCHANGED — same bytes, different
+# registry. Moved 2026-08-31 for the reason lint-infra.sh's CHECKOV records:
+# Docker Hub rate-limits unauthenticated pulls per IP, and CodeBuild shares a NAT
+# address with every other AWS customer. This one had not failed yet; it runs in
+# the application pipeline's Build stage and would have, eventually, on a
+# deployment rather than on a lint.
+SYFT="ghcr.io/anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0"
 OUTPUT="$DIST/sbom.spdx.json"
 
 [[ -f "$DIST/image.oci.tar" ]] || die "no image archive — run 'make build' first"

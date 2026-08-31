@@ -43,7 +43,22 @@ layer_path() {
 }
 
 TFLINT="ghcr.io/terraform-linters/tflint@sha256:cef181224b4a9cea521d8f785d50957ea3215b449e2d97e7793f222e2808d188"
-CHECKOV="bridgecrew/checkov@sha256:c5fb7154bed784fc19a69779c308fddba564f19a37c25d306c0e9765c4f0aa1d"
+# ghcr.io, not Docker Hub, and the digest is UNCHANGED — ghcr.io/bridgecrewio/checkov:3.3.13
+# and bridgecrew/checkov:3.3.13 are the same bytes, so this swaps the registry
+# without swapping the artifact.
+#
+# Docker Hub rate-limits unauthenticated pulls per source IP. Same shape as the
+# tflint ruleset problem above and the same reason it is invisible locally: a
+# laptop has its own budget, while CodeBuild pulls from a shared AWS NAT address
+# whose allowance belongs to every AWS customer behind it. Observed 2026-08-31,
+# on the run that came directly after the tflint fix:
+#
+#   docker: Error response from daemon: toomanyrequests:
+#   You have reached your unauthenticated pull rate limit.
+#
+# ghcr.io applies no anonymous pull limit, which is why the tflint image beside
+# this one had already been pulling cleanly all along.
+CHECKOV="ghcr.io/bridgecrewio/checkov@sha256:c5fb7154bed784fc19a69779c308fddba564f19a37c25d306c0e9765c4f0aa1d"
 
 # Layers come from the caller — the makefile passes $(TF_LAYERS), which is the
 # single source of truth. With no arguments they are discovered from the tree,

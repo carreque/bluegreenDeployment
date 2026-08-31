@@ -160,3 +160,115 @@ the duplicate in `app_pipeline_shape.tftest.hcl`, exactly as Phase 9 had to.
 adding a line: it needs a second `push` block, each repeating the branch filter —
 the shape the application pipeline already uses for its eleven. Recorded here
 because the cheap fix has just been spent.
+
+
+---
+
+## 7. Postscript — applying this cancelled the run that applied it
+
+The merge that delivered this fix produced an infra run that ended `Cancelled`,
+with every action green:
+
+```
+Source ✓  Validate ✓  Foundation: Plan ✓ Approve ✓ Apply ✓
+statusSummary: "Pipeline definition was updated"
+```
+
+Foundation's apply added `scripts/lint-infra.sh` to the trigger — a change to
+`aws_codepipeline.infra` itself — and **CodePipeline cancels any in-flight
+execution when the pipeline definition changes.** The run cancelled itself by
+succeeding, so Network, Staging and Prod never ran.
+
+This is the self-management caveat of §1's layer note, in a form neither that
+note nor roadmap §4 describes. Both cover the **broken** case: *a broken change
+to the pipeline definition must be repaired by a local apply*. This is the
+**successful** case, and it is quieter — nothing errors, nothing is broken,
+every action is green, and the run simply stops after Foundation. The only
+evidence of why is `statusSummary` on the execution, which no console view shows
+by default:
+
+```bash
+aws codepipeline list-pipeline-executions --pipeline-name bgd-us-east-1-infra-pipeline \
+  --max-items 1 --query 'pipelineExecutionSummaries[].[status,statusSummary]' --output text
+```
+
+**The operational rule:** a `foundation` change that alters the pipeline's own
+definition takes **two runs**. The first applies the definition and cancels
+itself; the second, started by hand or by the next merge, does everything
+downstream. Worth knowing before a change to the pipeline is made during an
+incident, when "the run cancelled and production never got the fix" is an easy
+thing to misread as a second failure.
+
+
+---
+
+## 8. The same failure again, one registry over
+
+The very next run — the re-trigger after §7's self-cancellation — failed at the
+same Validate stage, on the line immediately after the one just fixed:
+
+```
+==> checkov — infra/
+docker: Error response from daemon: toomanyrequests:
+You have reached your unauthenticated pull rate limit.
+```
+
+**Docker Hub rate-limits unauthenticated pulls per source IP**, and CodeBuild
+egresses through a shared AWS NAT address. That is the identical mechanism as
+§2's GitHub API limit, against a different service, hit within minutes of fixing
+the first one — which is the useful part of this finding. The problem was never
+tflint. It is that **this project pulls third-party images at build time over an
+IP it shares with strangers**, and every such pull is a dependency on someone
+else's generosity.
+
+`ghcr.io` applies no anonymous pull limit, which is why the tflint image sitting
+one line above checkov had been pulling cleanly all along, and why nobody had
+reason to suspect the registry as a variable.
+
+### The fix, and why it is unusually cheap
+
+Both `checkov` and `syft` publish the same images to `ghcr.io`, and the digests
+are **identical**:
+
+| Image | Docker Hub | ghcr.io | Digest |
+|---|---|---|---|
+| checkov 3.3.13 | `bridgecrew/checkov` | `ghcr.io/bridgecrewio/checkov` | `c5fb7154bed7…` — unchanged |
+| syft v1.51.0 | `anchore/syft` | `ghcr.io/anchore/syft` | `678bfa565b60…` — unchanged |
+
+So this swaps the *registry* without swapping the *artifact*. The pin still names
+the same bytes, and checkov returned the same `490 passed, 0 failed` afterwards,
+which is the evidence that nothing but the source changed.
+
+`syft` had not failed yet. It was moved in the same commit because it runs in the
+**application** pipeline's Build stage, so its version of this failure would have
+arrived during a deployment rather than during a lint — and would have looked
+like a broken release rather than a broken registry.
+
+### What is still exposed
+
+Two Docker Hub pulls remain, both in the application pipeline's Build stage,
+both extracted by `scripts/pipeline-app-build.sh` from files that pin them:
+
+| Image | Pinned in | Used by |
+|---|---|---|
+| `python:3.14.6-slim` | `app/Dockerfile` | the image build **and** the test stage |
+| `amazon/dynamodb-local` | `app/docker-compose.yml` | the test stage |
+
+Neither was moved here, deliberately. Both alternatives — `public.ecr.aws/docker/library/python`
+and `public.ecr.aws/aws-dynamodb-local/aws-dynamodb-local` — are *different
+repositories* rather than mirrors with matching digests, so each needs its digest
+re-recorded and re-verified, and the base image additionally sits underneath
+design §4.1's reproducibility claim. That is a change to make deliberately, with
+`make image-verify` run either side of it, not while recovering a production
+deployment.
+
+**The remaining registry inventory**, for whoever makes that change:
+
+```
+ghcr.io/terraform-linters/tflint      no anonymous limit
+ghcr.io/bridgecrewio/checkov          no anonymous limit
+ghcr.io/anchore/syft                  no anonymous limit
+quay.io/skopeo/stable                 no anonymous limit
+python:3.14.6-slim                    Docker Hub — rate limited
+amazon/dynamodb-local                 Docker Hub — rate limited
+```

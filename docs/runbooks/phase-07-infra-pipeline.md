@@ -308,6 +308,33 @@ Open any of the four approvals from step 6 in the console.
 
 ---
 
+## 8a. When a run cancels itself after Foundation
+
+*Added 2026-08-31.* A run whose actions are all green but whose execution reads
+`Cancelled` has almost certainly updated the pipeline's own definition:
+
+```bash
+aws codepipeline list-pipeline-executions --pipeline-name bgd-us-east-1-infra-pipeline \
+  --max-items 1 --query 'pipelineExecutionSummaries[].[status,statusSummary]' --output text
+# Cancelled    Pipeline definition was updated
+```
+
+CodePipeline cancels any in-flight execution when the pipeline structure
+changes, so Foundation applies the new definition and the run stops there —
+Network, Staging and Prod never execute. Nothing is broken and nothing needs
+repairing; the fix is to start a second run:
+
+```bash
+aws codepipeline start-pipeline-execution --name bgd-us-east-1-infra-pipeline
+```
+
+Its Foundation stage plans no changes, and the run continues to the layers the
+first one never reached. **Budget two runs for any change that touches the
+trigger, the stages, the actions or the execution variables.** Section 9 below
+covers the different, louder case where the new definition is broken.
+
+---
+
 ## 9. Repairing a broken pipeline definition by local apply
 
 Listed as a planned Phase 7 runbook since Phase 3, and this is it. **Do not
