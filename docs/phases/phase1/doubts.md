@@ -3,7 +3,7 @@
 **Date:** 2026-08-10
 **Branch:** `feat/Phase1_application_development`
 **Companion documents:** [implementation plan](./2026-08-05-phase-01-implementation-plan.md) ·
-[local verification](./2026-08-09-local-verification.md) · [`Session1Phase1.md`](../../../Session1Phase1.md)
+[local verification](./2026-08-09-local-verification.md) · `Session1Phase1.md` (a session working file outside this repository)
 
 A record of the parts of the Phase 1 code that were not obvious on reading, and
 what each one actually does. Written question-first, so it can be read as a
@@ -15,7 +15,7 @@ decoration.
 
 Three earlier questions — the DynamoDB Local image digest, `ge`/`le` in
 `Query(...)`, and how `/ready` sets a 503 without returning the `Response` — are
-already recorded in [`Session1Phase1.md` §5](../../../Session1Phase1.md) and are
+already recorded in `Session1Phase1.md` §5 (outside this repository) and are
 not repeated here.
 
 | # | Question | Subject |

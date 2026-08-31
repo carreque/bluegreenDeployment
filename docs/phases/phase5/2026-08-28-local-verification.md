@@ -201,7 +201,7 @@ true offline: see §6's `lint-infra.sh` entry.
 This is the part of Phase 5 that carries the most weight, because it is the
 only part run against something real rather than mocked — a local container,
 not AWS. Taken verbatim from
-[Task 8's report](../../../.superpowers/sdd/2026-08-28-phase-05-implementation-plan/task-8-report.md).
+Task 8's report, which was a session working file outside this repository and is not preserved.
 
 **Read-only root filesystem, against the real Phase 2 image:**
 

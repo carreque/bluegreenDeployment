@@ -1605,9 +1605,9 @@ Replace the table with one that reflects what now exists:
 ```markdown
 | Buildspec | Pipeline | Phase | Status |
 |---|---|---|---|
-| [`infra-validate.yml`](./infra-validate.yml) — `make tf-fmt-check tf-validate tf-test tf-lint` | infra | 7 | built |
-| [`infra-plan.yml`](./infra-plan.yml) — plan one layer, export the summary | infra | 7 | built |
-| [`infra-apply.yml`](./infra-apply.yml) — apply the saved plan | infra | 7 | built |
+| [`infra-validate.yml`](../../../pipelines/infra-validate.yml) — `make tf-fmt-check tf-validate tf-test tf-lint` | infra | 7 | built |
+| [`infra-plan.yml`](../../../pipelines/infra-plan.yml) — plan one layer, export the summary | infra | 7 | built |
+| [`infra-apply.yml`](../../../pipelines/infra-apply.yml) — apply the saved plan | infra | 7 | built |
 | app build, test, image, SBOM | app | 8 | planned |
 ```
 
@@ -2539,7 +2539,7 @@ And extend the closing paragraph:
 The pipelines live in this layer, so the infra pipeline ends up managing the layer
 that contains it. That is intentional — but it means a broken pipeline definition
 must be repaired by a local `terraform apply`. The
-[Phase 7 runbook](../../docs/runbooks/phase-07-infra-pipeline.md) has that
+[Phase 7 runbook](../../runbooks/phase-07-infra-pipeline.md) has that
 procedure as a step of its own, because the moment it is needed is the moment
 the pipeline cannot help.
 ```
