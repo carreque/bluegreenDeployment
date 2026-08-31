@@ -39,7 +39,7 @@ project's tooling:
    the phase's own amendment said plainly that the branch did not meet it. The
    cycle was never run until tonight.
 2. **The shell suite drives a fake AWS CLI.** It proves the guards, the scope
-   arithmetic and the refusals — 116 checks of real value — but a fake CLI
+   arithmetic and the refusals — 113 checks of real value — but a fake CLI
    answers every call and the suite therefore never reaches Terraform's own
    variable validation. **No amount of that suite could have found this**, which
    is not a criticism of it; it is the boundary of what an offline gate can do,
@@ -62,9 +62,21 @@ not prove: they catch the wiring being removed or renamed again; they cannot
 reproduce the original failure, because the suite never reaches Terraform. Only
 the runbook can.
 
-**Verified:** `make test-scripts` — 119 checks, 0 failed (116 before), and a real
-`make teardown SCOPE=prod` followed by `make rebuild SCOPE=prod` completed
+**Verified:** `make test-scripts` — **116 checks, 0 failed** (113 before), and a
+real `make teardown SCOPE=prod` followed by `make rebuild SCOPE=prod` completed
 against the account.
+
+> **A correction, recorded rather than quietly fixed.** This section first
+> claimed "119 checks (116 before)", having taken the *before* figure from [the
+> Phase 10 amendment](../../2026-08-04-implementation-phase-roadmap.md)'s "116
+> shell checks" instead of running the suite. The suite reported **113** before
+> tonight and reports **116** now. The roadmap's figure was an overstatement of
+> three when written, and the suite has only just grown into it — which is
+> exactly the kind of number this project claims to measure rather than
+> remember. Counted from source: 110 `check` invocations at `e3583cf` against 113
+> now, the difference being the three added here; the runtime total runs three
+> higher than the source count in both cases, because some checks sit inside
+> loops.
 
 ## 4. A second defect found in the same command
 

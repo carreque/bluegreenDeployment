@@ -1120,6 +1120,14 @@ Only images flow through this pipeline. Task definition and service shape stay o
 > `infra/foundation/tests/pipeline_shape.tftest.hcl`. That is what makes the
 > runbook worth following rather than debugging.
 >
+> **Corrected 2026-08-31.** "116 shell checks" was not measured: the suite
+> reported **113** at this branch's tip and reports 116 only after tonight added
+> three. The number was right about the shape of the evidence and wrong about its
+> size, in a document whose own standard is that a figure nobody has observed
+> should not be printed as though somebody had — the same standard §7 of the
+> Phase 10 runbook applies to its timings. See [the teardown
+> record](./phases/phase10/2026-08-31-teardown-could-not-destroy.md).
+>
 > §2's branch table row 10 reads `feat/Phase10_TeardownRebuild`, which is the
 > branch used. **No amendment needed there** — recorded explicitly, as Phases
 > 3, 5, 6, 7, 8 and 9 did, so the absence reads as checked rather than
