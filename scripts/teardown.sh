@@ -130,11 +130,24 @@ for layer in "${TEARDOWN_ORDER[@]}"; do
   info "$layer — terraform destroy"
   started=$SECONDS
 
+  # staging and prod declare image_tag with no default, and Terraform demands a
+  # value for a destroy exactly as it does for an apply. Without this the
+  # destroy fails before touching anything, which is how this command reached
+  # 2026-08-31 unable to destroy either of the two layers it exists to destroy.
+  # The value comes from the same SSM parameter rebuild.sh reads, so a teardown
+  # and the rebuild that follows it agree about what was deployed.
+  tf_vars=()
+  case "$layer" in
+    staging | prod) tf_vars=(-var "image_tag=$(resolve_image_tag "$layer")") ;;
+  esac
+
   # -auto-approve because the single typed confirmation above replaced the
   # per-layer prompts. -lock-timeout matches both pipeline drivers: without it
   # a destroy racing a pipeline apply fails instantly on the lock rather than
   # waiting for it.
-  "$ROOT/scripts/tf.sh" destroy "$layer" -auto-approve -input=false -lock-timeout=5m ||
+  "$ROOT/scripts/tf.sh" destroy "$layer" \
+    -auto-approve -input=false -lock-timeout=5m \
+    ${tf_vars[@]+"${tf_vars[@]}"} ||
     die "destroy failed for $layer; later layers were not touched. The marker already reads $SURVIVING_SCOPE, so both pipelines will skip this layer — re-run once the cause is fixed."
 
   elapsed=$((SECONDS - started))

@@ -155,3 +155,27 @@ check "SCOPE=network needs no image tag" "0" "$STATUS"
 unset FAKE_SSM_IMAGE_TAG
 
 report
+
+# --- the destroy supplies the variables the layers require ---------------------
+#
+# Found 2026-08-31, the first time `make teardown` was ever run against a real
+# account: it failed on the first layer with
+#
+#   Error: No value for required variable ... variable "image_tag"
+#
+# Both environment layers declare image_tag with no default, and Terraform
+# demands a value for a destroy exactly as for an apply. rebuild.sh resolved it
+# from SSM; teardown.sh did not. Neither layer had ever been destroyable by the
+# command that exists to destroy them.
+#
+# BE HONEST ABOUT WHAT THIS PROVES. The suite drives a fake AWS CLI and never
+# reaches Terraform, so it cannot reproduce the original failure — only a real
+# destroy can, which is the runbook's job. What these two checks catch is the
+# regression: the wiring being removed or renamed again. That is worth having
+# and is not the same as coverage.
+check_contains "teardown resolves an image tag for the environment layers" \
+  "resolve_image_tag" "$(cat "$ROOT/scripts/teardown.sh")"
+check_contains "…and passes it to the destroy as -var image_tag" \
+  'image_tag=$(resolve_image_tag' "$(cat "$ROOT/scripts/teardown.sh")"
+check_contains "the resolver is shared, not a second copy" \
+  "resolve_image_tag()" "$(cat "$ROOT/scripts/lib/common.sh")"

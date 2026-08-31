@@ -329,17 +329,78 @@ DEPLOYED_SCOPE_PARAM="/bgd/platform/deployed_scope"
 # permission silently restores the behaviour the marker exists to remove, with
 # nothing anywhere reporting it. Plan §D6.
 read_deployed_scope() {
-  local value
-  value="$(aws ssm get-parameter \
+  local value err
+  # stderr is captured rather than discarded, and the reason is a real incident
+  # on 2026-08-31: a transient failure of this one call produced
+  #
+  #   ✗ cannot read /bgd/platform/deployed_scope — apply the foundation layer,
+  #     which is what creates it
+  #
+  # …on an account where the parameter existed and foundation was applied. The
+  # message names ONE cause for a call that fails many ways — an expired SSO
+  # token, a throttle, a wrong region, a genuinely absent parameter — and
+  # 2>/dev/null threw away the only evidence that distinguishes them. The
+  # operator went looking for a missing parameter that was never missing.
+  #
+  # A missing parameter is still called out by name, because it is the cause
+  # with a specific remedy. Anything else now reports what AWS actually said.
+  err="$(mktemp)"
+  if ! value="$(aws ssm get-parameter \
     --region "${AWS_REGION:-us-east-1}" \
     --name "$DEPLOYED_SCOPE_PARAM" \
-    --query 'Parameter.Value' --output text 2>/dev/null)" ||
-    die "cannot read $DEPLOYED_SCOPE_PARAM — apply the foundation layer, which is what creates it"
+    --query 'Parameter.Value' --output text 2>"$err")"; then
+    local detail
+    detail="$(tr -d '\n' <"$err" | sed 's/  */ /g')"
+    rm -f "$err"
+    case "$detail" in
+      *ParameterNotFound*)
+        die "$DEPLOYED_SCOPE_PARAM does not exist — apply the foundation layer, which is what creates it"
+        ;;
+      *)
+        die "cannot read $DEPLOYED_SCOPE_PARAM: ${detail:-the AWS CLI failed with no message}. If this is a missing parameter, apply the foundation layer, which is what creates it; otherwise check the session and the region and retry"
+        ;;
+    esac
+  fi
+  rm -f "$err"
 
   (($(platform_scope_rank "$value") > 0)) ||
     die "$DEPLOYED_SCOPE_PARAM is '$value'; expected one of foundation, network, staging, all"
 
   printf '%s' "$value"
+}
+
+# resolve_image_tag <layer> — the ECR tag recorded for staging or prod.
+#
+# Added 2026-08-31, because teardown.sh did not have it and could not work
+# without it. Both environment layers declare image_tag with NO default (Phase 5
+# D3: a stale default silently deploys an old image), and Terraform requires
+# every variable to have a value for a **destroy** just as much as for an apply.
+# rebuild.sh resolved the tag from SSM and teardown.sh did not, so
+# `make teardown` failed on the first layer it reached with
+#
+#   Error: No value for required variable ... variable "image_tag"
+#
+# — meaning neither environment layer had ever been destroyable by the command
+# whose whole purpose is destroying them. Nothing caught it because Phase 10
+# created no AWS resources and the shell suite drives a fake AWS CLI, which
+# answers every call and therefore never reaches Terraform's own validation.
+#
+# The real recorded tag rather than a placeholder, because a destroy still
+# refreshes data.aws_ecr_image, and a tag that is not in the registry fails the
+# read before anything is destroyed.
+resolve_image_tag() {
+  local layer="$1" param tag
+  param="/bgd/${layer}/image_tag"
+
+  tag="$(aws ssm get-parameter \
+    --region "${AWS_REGION:-us-east-1}" \
+    --name "$param" \
+    --query 'Parameter.Value' --output text 2>/dev/null)" ||
+    die "cannot read $param — apply the foundation layer, which is what creates it"
+
+  [[ -n "$tag" && "$tag" != "unset" && "$tag" != "None" ]] &&
+    printf '%s' "$tag" ||
+    die "$param is '$tag' — run 'make seed-ecr' to record a tag, or let the app pipeline set one"
 }
 
 # write_deployed_scope <value> — record how deep the platform is applied.
