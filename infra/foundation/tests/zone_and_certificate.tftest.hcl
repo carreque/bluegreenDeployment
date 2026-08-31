@@ -13,8 +13,37 @@ variables {
 }
 
 # The account already holds the zone, delegated by the Route 53 registrar.
+#
+# `name` has NO trailing dot, because that is what the aws provider actually
+# returns — verified against provider 6.61.0 on 2026-08-31, not assumed. This
+# mock previously carried the dotted form copied from the Route 53 API, and the
+# adopt assertion below passed against a formatting the provider never produces:
+# on the first real apply the filter matched nothing, a second hosted zone was
+# created for a delegated domain, and ACM validation hung. A mock is only
+# evidence to the extent it matches the thing it stands in for.
 mock_provider "aws" {
   alias = "zone_present"
+
+  mock_data "aws_route53_zones" {
+    defaults = { ids = ["Z01311493LQ7UOIRHM1H9"] }
+  }
+
+  mock_data "aws_route53_zone" {
+    defaults = {
+      zone_id      = "Z01311493LQ7UOIRHM1H9"
+      name         = "carloscloudengineer.com"
+      private_zone = false
+    }
+  }
+}
+
+# The same zone, named the way the Route 53 API renders it. The matcher trims
+# both sides, so both spellings must adopt — and asserting both is what stops a
+# future provider change from silently reintroducing the bug in either
+# direction. Neither run alone is sufficient: the undotted mock above is the
+# truth today, this one is the truth the provider could return tomorrow.
+mock_provider "aws" {
+  alias = "zone_present_dotted"
 
   mock_data "aws_route53_zones" {
     defaults = { ids = ["Z01311493LQ7UOIRHM1H9"] }
@@ -48,6 +77,24 @@ run "adopts_the_zone_the_registrar_created" {
   assert {
     condition     = output.zone_was_created == false
     error_message = "the existing zone must be adopted; creating a second zone for the same domain breaks delegation"
+  }
+
+  assert {
+    condition     = output.zone_id == "Z01311493LQ7UOIRHM1H9"
+    error_message = "the adopted zone must be the one the registrar delegated to"
+  }
+}
+
+run "adopts_the_zone_however_the_provider_spells_the_name" {
+  command = plan
+
+  providers = {
+    aws = aws.zone_present_dotted
+  }
+
+  assert {
+    condition     = output.zone_was_created == false
+    error_message = "a trailing dot on the zone name must not defeat the match; that exact mismatch created a second zone on 2026-08-31"
   }
 
   assert {
