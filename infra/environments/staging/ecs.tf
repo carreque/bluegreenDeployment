@@ -128,6 +128,34 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
 
+  # Added 2026-08-31, and it closes a gap this file already described.
+  #
+  # The depends_on comment below has said since Phase 5 that "there is no
+  # wait_for_steady_state, so terraform apply reports SUCCESS while the service
+  # never actually stabilises." That was recorded as an aside about IAM
+  # propagation on a first apply, and its real consequence arrived three phases
+  # later: Phase 8 put a Smoke action immediately after this layer's apply, and
+  # scripts/smoke.sh's fourth assertion compares the digest being SERVED against
+  # the digest Terraform deployed. Without this line the apply returns while the
+  # rolling replacement is still in flight, so smoke reads the PREVIOUS task's
+  # /version and fails —
+  #
+  #   digest ✗ serving sha256:b477abea…, Terraform deployed sha256:d593cc5f…
+  #
+  # — on a deployment that was in fact healthy and finished seconds later.
+  #
+  # The failure is safe but not harmless: it fails CLOSED, since a pass can only
+  # happen when the intended image is actually serving, so no bad deployment was
+  # ever waved through. What it does instead is block good ones at random, which
+  # over time is the thing that teaches people to re-run a red pipeline without
+  # reading it.
+  #
+  # This does not weaken "staging fails fast" — deployment_circuit_breaker above
+  # still ends a bad rollout rather than retrying it forever, and with this line
+  # that ending is reported to the caller instead of being reported as success.
+  # It is the same argument prod's D11 makes for the same setting.
+  wait_for_steady_state = true
+
   network_configuration {
     subnets          = local.network.private_subnet_ids
     security_groups  = [local.network.task_security_group_ids[local.environment]]

@@ -209,6 +209,26 @@ run "the_service_runs_private_tasks_with_attributable_tags" {
   }
 }
 
+run "the_apply_does_not_return_before_the_rollout_is_done" {
+  command = plan
+
+  # Found 2026-08-31, when Phase 8's Smoke action failed against a healthy
+  # deployment. Without this the apply returns while the rolling replacement is
+  # still in flight, and scripts/smoke.sh reads the PREVIOUS task's /version —
+  # its fourth assertion compares the digest being served against the digest
+  # Terraform deployed, so it reports a mismatch on a deployment that finished
+  # correctly moments later.
+  #
+  # It fails closed rather than open, which is why nothing bad shipped: a pass
+  # requires the intended image to actually be serving. The cost is randomly red
+  # pipelines on good deployments, which is how people learn to re-run without
+  # reading.
+  assert {
+    condition     = aws_ecs_service.api.wait_for_steady_state == true
+    error_message = "the apply must not return before the rollout stabilises; the Smoke action runs immediately after it and reads /version"
+  }
+}
+
 run "the_service_deploys_by_rolling_and_rolls_itself_back" {
   command = apply
 
