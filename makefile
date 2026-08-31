@@ -293,6 +293,22 @@ test-lambdas: deps ## Run the Lambda handler suite
 test-scripts: ## Run the shell suite for scripts/ (no AWS session needed)
 	@./scripts/tests/run.sh
 
+# ---------------------------------------------------------------------------
+# Documentation
+# ---------------------------------------------------------------------------
+
+# Deliberately NOT a dependency of tf-check, and deliberately not run by the
+# pipeline's Validate stage. A dead link is a documentation defect, not a
+# deployment risk, and a Validate stage that fails on prose is a Validate stage
+# people learn to skip. Run it when you touch docs/.
+#
+# These documents cross-reference each other heavily and nothing checked any of
+# it: six links were broken for weeks and found only by a review that happened
+# to follow one.
+.PHONY: docs-check
+docs-check: ## Check that every relative link in the docs resolves (no AWS session needed)
+	@./scripts/check-docs.sh
+
 # Deliberately separate from teardown, and re-runnable. Folded in, "the destroy
 # failed" and "the destroy succeeded but something survived" would be the same
 # red exit from the same command — and there would be no way to check an account

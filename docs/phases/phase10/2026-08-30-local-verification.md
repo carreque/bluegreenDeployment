@@ -3,7 +3,8 @@
 **Date:** 2026-08-30
 **Branch:** `feat/Phase10_TeardownRebuild`
 **Plan:** [2026-08-30-phase-10-implementation-plan.md](./2026-08-30-phase-10-implementation-plan.md)
-**Pull request:** [2026-08-30-pull-request.md](./2026-08-30-pull-request.md)
+**Pull request:** described in `2026-08-30-pull-request.md`, deleted in `e3583cf`
+once the pull request itself was merged — the description lives on the PR.
 
 Everything below ran on a laptop with **no AWS session**. `aws sts
 get-caller-identity` returns `InvalidClientTokenId` throughout, which is what

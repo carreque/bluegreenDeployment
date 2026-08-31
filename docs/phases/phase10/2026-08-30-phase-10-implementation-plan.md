@@ -2617,7 +2617,7 @@ Create `docs/runbooks/phase-10-teardown-and-rebuild.md` with these sections, eac
 Replace the planned row:
 
 ```markdown
-| [Teardown, the idle check, and the rebuild — what survives, what does not, how long it takes](./phase-10-teardown-and-rebuild.md) | 10 |
+| [Teardown, the idle check, and the rebuild — what survives, what does not, how long it takes](../../runbooks/phase-10-teardown-and-rebuild.md) | 10 |
 ```
 
 And replace the paragraph beginning *"From Phase 7 the infra pipeline applies `infra/`"*'s teardown caveat with the new behaviour: both pipelines now read `/bgd/platform/deployed_scope` and skip the layers a teardown removed, so a merge while torn down is safe and creates nothing.
@@ -2637,7 +2637,7 @@ correctly does not count it.
 
 There is nothing to disable and nothing to re-enable. `make rebuild` raises the
 marker again as its last act on each layer; see [the Phase 10
-runbook](./phase-10-teardown-and-rebuild.md).
+runbook](../../runbooks/phase-10-teardown-and-rebuild.md).
 ```
 
 - [ ] **Step 4: Commit**
