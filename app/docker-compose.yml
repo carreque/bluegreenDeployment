@@ -6,13 +6,18 @@
 #
 # Pinned by digest rather than tag, per design §4.1. Recorded 2026-08-05 —
 # re-record with:
-#   docker pull amazon/dynamodb-local:latest
-#   docker image inspect amazon/dynamodb-local:latest --format '{{index .RepoDigests 0}}'
+#   docker buildx imagetools inspect public.ecr.aws/aws-dynamodb-local/aws-dynamodb-local:latest --format '{{.Manifest.Digest}}'
+#
+# public.ecr.aws, not Docker Hub, and THE DIGEST IS UNCHANGED — AWS publishes
+# the identical image to its own public registry. Moved 2026-08-31 for the
+# reason app/Dockerfile's BASE_IMAGE records: Docker Hub rate-limits
+# unauthenticated pulls per source IP, and this pull plus the base image's two
+# failed a production deployment from CodeBuild's shared NAT address.
 name: bgd-local
 
 services:
   dynamodb-local:
-    image: amazon/dynamodb-local@sha256:ff89bd48ff32cd8d9be5fee8873b65b8854dc408f1afe881be6eb00247bc0dab
+    image: public.ecr.aws/aws-dynamodb-local/aws-dynamodb-local@sha256:ff89bd48ff32cd8d9be5fee8873b65b8854dc408f1afe881be6eb00247bc0dab
     container_name: bgd-dynamodb-local
     # -sharedDb: one database regardless of which credentials or region the
     #   caller presents, so the AWS CLI and the application see the same

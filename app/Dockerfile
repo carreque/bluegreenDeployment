@@ -7,10 +7,28 @@
 # the default buildx driver silently ignores rewrite-timestamp.
 #
 # Base pinned by index digest. Recorded 2026-08-12 — re-record with:
-#   docker buildx imagetools inspect python:3.14.6-slim --format '{{.Manifest.Digest}}'
+#   docker buildx imagetools inspect public.ecr.aws/docker/library/python:3.14.6-slim --format '{{.Manifest.Digest}}'
 # 3.14.6 exactly, not 3.14-slim: it matches .python-version, so the container,
 # the local virtualenv and CI all run the same interpreter (design §1.6).
-ARG BASE_IMAGE=python:3.14.6-slim@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144
+#
+# public.ecr.aws/docker/library, not Docker Hub, and THE DIGEST IS UNCHANGED —
+# AWS's mirror of the Docker official images serves the identical index digest,
+# so this is the same base image reached over a different registry and design
+# §4.1's reproducibility claim is untouched.
+#
+# Moved 2026-08-31 because Docker Hub rate-limits unauthenticated pulls per
+# source IP and CodeBuild shares a NAT address with every other AWS customer
+# behind it. The application pipeline's Build stage pulls this image twice — once
+# for the test suite, once as the build's FROM — plus DynamoDB Local, and it
+# failed with `toomanyrequests` on a deployment. Same failure as the tflint
+# ruleset and checkov before it; see
+# docs/phases/phase7/2026-08-31-tflint-ruleset-install.md §8.
+#
+# The trade is small and worth naming: ECR Public also rate-limits ANONYMOUS
+# pulls, but generously, and a build inside AWS authenticates with its role.
+# A laptop that ever hits it can raise the limit with
+#   aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+ARG BASE_IMAGE=public.ecr.aws/docker/library/python:3.14.6-slim@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144
 
 # ---------------------------------------------------------------------------
 # builder — resolve the virtualenv, and only the virtualenv

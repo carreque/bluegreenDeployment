@@ -59,11 +59,16 @@ APP="$ROOT/app"
 DIST="$APP/dist"
 VARS_FILE="$ROOT/build-vars.env"
 
-PYTHON_IMAGE="$(sed -n 's/^ARG BASE_IMAGE=\(python:[^[:space:]]*@sha256:[0-9a-f]\{64\}\)$/\1/p' "$APP/Dockerfile" | head -1)"
+# The patterns below anchor on the ARG name and the service name rather than on
+# a registry, because both images moved off Docker Hub on 2026-08-31 and a
+# pattern that hard-codes `python:` or `amazon/` silently extracts NOTHING after
+# such a move — which the `die` below turns into a loud failure, but only after
+# a build has already been spent finding out.
+PYTHON_IMAGE="$(sed -n 's/^ARG BASE_IMAGE=\([^[:space:]]*@sha256:[0-9a-f]\{64\}\)$/\1/p' "$APP/Dockerfile" | head -1)"
 [[ -n "$PYTHON_IMAGE" ]] ||
   die "cannot read the base image pin from app/Dockerfile — the tests must run on the interpreter the image ships"
 
-DYNAMODB_LOCAL="$(sed -n 's|^[[:space:]]*image:[[:space:]]*\(amazon/dynamodb-local@sha256:[0-9a-f]\{64\}\)[[:space:]]*$|\1|p' "$APP/docker-compose.yml" | head -1)"
+DYNAMODB_LOCAL="$(sed -n 's|^[[:space:]]*image:[[:space:]]*\([^[:space:]]*dynamodb-local@sha256:[0-9a-f]\{64\}\)[[:space:]]*$|\1|p' "$APP/docker-compose.yml" | head -1)"
 [[ -n "$DYNAMODB_LOCAL" ]] ||
   die "cannot read the DynamoDB Local pin from app/docker-compose.yml"
 
