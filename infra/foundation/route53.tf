@@ -20,9 +20,23 @@ locals {
   # zone this project did not create, or a provider that widens the type — makes
   # the negation abort the whole plan with "argument must not be null", on a line
   # that looks correct. See the Phase 3 plan §F4.
+  #
+  # Both sides are trimmed rather than one side being written with a trailing
+  # dot, and that is the whole bug this line once had. Route 53's API returns
+  # `carloscloudengineer.com.`, so the comparison was written against that —
+  # but the aws provider's data source normalises it and hands back
+  # `carloscloudengineer.com`, with no dot. The filter therefore matched
+  # nothing, `zone_exists` was permanently false, and the create path ran on an
+  # account that already held a correctly delegated zone. The symptom is not a
+  # failed apply: it is a second zone nobody points at, ACM validation records
+  # written into it, and `aws_acm_certificate_validation` hanging for its
+  # 75-minute timeout. Found 2026-08-31, on the first real foundation apply.
+  #
+  # trimsuffix on both sides rather than dropping the dot from the literal, so
+  # this survives the provider normalising the other way again.
   matched_zone_ids = [
     for zone in data.aws_route53_zone.candidates : zone.zone_id
-    if zone.name == "${var.domain_name}." && zone.private_zone != true
+    if trimsuffix(zone.name, ".") == trimsuffix(var.domain_name, ".") && zone.private_zone != true
   ]
 
   zone_exists = length(local.matched_zone_ids) > 0
