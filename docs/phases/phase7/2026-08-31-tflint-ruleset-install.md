@@ -244,31 +244,65 @@ which is the evidence that nothing but the source changed.
 arrived during a deployment rather than during a lint — and would have looked
 like a broken release rather than a broken registry.
 
-### What is still exposed
+### The exposure closed, an hour later, on a production deployment
 
-Two Docker Hub pulls remain, both in the application pipeline's Build stage,
-both extracted by `scripts/pipeline-app-build.sh` from files that pin them:
+Two Docker Hub pulls were deliberately left in place: `python:3.14.6-slim` and
+`amazon/dynamodb-local`, both in the application pipeline's Build stage. The
+reasoning was that their `public.ecr.aws` counterparts are different
+repositories needing digests re-recorded, and that the base image sits under
+design §4.1's reproducibility claim — deliberate work, not an incident fix.
 
-| Image | Pinned in | Used by |
+**They failed within the hour**, on the deployment this whole evening was
+building toward:
+
+```
+==> starting DynamoDB Local          ← pulled, using the last of the quota
+==> running the test suite
+docker: Error response from daemon: toomanyrequests
+```
+
+The Build stage pulls the base image **twice** — once for the test suite, once
+as the build's `FROM` — plus DynamoDB Local: three Docker Hub pulls per build
+against a limit of roughly ten per hour shared with strangers. The judgement to
+defer was reasonable on the merits and wrong on the odds.
+
+Both moved, and both turned out to be free:
+
+| Image | To | Digest |
 |---|---|---|
-| `python:3.14.6-slim` | `app/Dockerfile` | the image build **and** the test stage |
-| `amazon/dynamodb-local` | `app/docker-compose.yml` | the test stage |
+| python 3.14.6-slim | `public.ecr.aws/docker/library/python` | `7bec7ddc…` **unchanged** |
+| DynamoDB Local | `public.ecr.aws/aws-dynamodb-local/aws-dynamodb-local` | `ff89bd48…` **unchanged** |
 
-Neither was moved here, deliberately. Both alternatives — `public.ecr.aws/docker/library/python`
-and `public.ecr.aws/aws-dynamodb-local/aws-dynamodb-local` — are *different
-repositories* rather than mirrors with matching digests, so each needs its digest
-re-recorded and re-verified, and the base image additionally sits underneath
-design §4.1's reproducibility claim. That is a change to make deliberately, with
-`make image-verify` run either side of it, not while recovering a production
-deployment.
+AWS mirrors both with identical manifests, so this is the same base image over a
+different registry and the reproducibility claim is untouched — confirmed by
+running `make image-verify` afterwards: two clean builds, one digest.
 
-**The remaining registry inventory**, for whoever makes that change:
+**A second defect surfaced only because of the move.**
+`scripts/pipeline-app-build.sh` extracted both pins with `sed` patterns anchored
+on `python:` and `amazon/`. After the move they would have matched nothing and
+the script would have died on *"cannot read the base image pin from
+app/Dockerfile"* — a loud failure with a cause nobody would connect to a
+registry change. Both patterns now anchor on the ARG name and the service name
+instead. The lesson generalises: **a pattern that hard-codes today's value of
+the thing it extracts breaks silently when that value moves**, and the `die`
+that catches it fires a build too late.
+
+`.github/workflows/pr-validate.yml` pulls the same image in two jobs and was
+moved with them.
+
+**The remaining registry inventory** — no Docker Hub left:
 
 ```
-ghcr.io/terraform-linters/tflint      no anonymous limit
-ghcr.io/bridgecrewio/checkov          no anonymous limit
-ghcr.io/anchore/syft                  no anonymous limit
-quay.io/skopeo/stable                 no anonymous limit
-python:3.14.6-slim                    Docker Hub — rate limited
-amazon/dynamodb-local                 Docker Hub — rate limited
+ghcr.io/terraform-linters/tflint            no anonymous limit
+ghcr.io/bridgecrewio/checkov                no anonymous limit
+ghcr.io/anchore/syft                        no anonymous limit
+quay.io/skopeo/stable                       no anonymous limit
+public.ecr.aws/docker/library/python        AWS; authenticated inside AWS
+public.ecr.aws/aws-dynamodb-local/…         AWS; authenticated inside AWS
 ```
+
+ECR Public does rate-limit anonymous pulls, so a laptop can still hit it —
+generously, and it is raised with
+`aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws`.
+A build inside AWS authenticates with its role and does not meet the limit at
+all.

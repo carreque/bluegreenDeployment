@@ -362,6 +362,24 @@ Deliberately the simpler of the two environments — rolling deployments, one ta
 > §2's branch table needed no amendment: row 5 already reads
 > `feat/Phase5_Staging`, and that is the branch used. Same as Phase 3's note.
 
+> **Amended in execution (2026-08-31) — the smoke test raced the rollout it was
+> testing.** Full record: [the smoke race](./phases/phase5/2026-08-31-smoke-races-the-rollout.md).
+>
+> - **`terraform apply` returned mid-rollout**, so Phase 8's Smoke action read
+>   the *previous* task's `/version` and failed its digest assertion on a
+>   deployment that was correct and finished seconds later.
+> - **This layer's own comment had said so since Phase 5** — *"there is no
+>   `wait_for_steady_state`, so terraform apply reports SUCCESS while the service
+>   never actually stabilises"* — written in passing, in a comment about IAM
+>   ordering. The consequence arrived three phases later when a smoke test was
+>   attached to that apply. **A caveat recorded inside a comment about something
+>   else is not a caveat the next phase will find.**
+> - **It fails closed**, so nothing bad ever shipped: the assertion can only pass
+>   when the intended digest is serving. The cost is good deployments going red at
+>   random, which teaches people to re-run a failed pipeline without reading it.
+> - Fixed with `wait_for_steady_state = true`, matching prod since Phase 6, plus
+>   a test that carries the reason.
+
 ### Phase 6 — Production environment with native blue/green
 
 The technical centre of the project.
@@ -472,6 +490,74 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 >   demonstrated accidentally and completely: a hook rejected, the deployment
 >   aborted, and no traffic moved. What it did not demonstrate is the intended
 >   version of it, on a deployment that could otherwise have succeeded.
+
+> **Amended in execution (2026-08-31) — blue/green does not isolate the colours,
+> and this is the most serious finding in the project.** Status **open**:
+> reproduced four times, cause not established. Full record: [blue/green does not
+> isolate](./phases/phase6/2026-08-31-blue-green-does-not-isolate.md).
+>
+> - **Every revision registers into the same target group.**
+>   `bgd-us-east-1-prod-api-blue` has never held a single target — not on a
+>   create, not on any deployment, across two separate services and a full
+>   teardown and rebuild. `green` goes 2 → 4 → 2 on each deployment: the new
+>   tasks join the old ones rather than replacing them in a second group.
+> - **So the `:8443` test listener cannot isolate anything.** It points at the
+>   group that holds *both* revisions, and sampling caught it answering with a
+>   different version from one ten-second sample to the next. The dark canary has
+>   now reported the **outgoing** revision on three consecutive deployments. It
+>   has never once seen the revision it was invoked to judge.
+> - **Users are served both revisions at once** for the length of the bake —
+>   five minutes configured, about seven observed — and every one of those
+>   deployments finished `SUCCESSFUL` with all four alarms `OK` and both
+>   pipelines green.
+> - **The configuration is not the cause**, and neither is the earlier aborted
+>   create. `strategy: BLUE_GREEN` is confirmed on the live service, with the
+>   bake, the four alarms and all three hooks; `alternate_target_group_arn` is
+>   present on the resource and on two service revisions; the listener rules
+>   start on opposite colours exactly as `edge.tftest.hcl` asserts. A clean
+>   service built by `make rebuild` behaves identically.
+> - **Exit criterion 2 is not merely unverified — it is unachievable as
+>   configured.** *"different SHAs on `:443` and `:8443` mid-deployment"* requires
+>   the two listeners to reach different revisions; they reach one pool. No
+>   previous phase has had to say that about its own criterion.
+> - **Phase 11's first demonstration is blocked** for the same reason: *"the bad
+>   build never receives production traffic"* is false here, because the bad build
+>   is in the pool the production listener already serves from.
+> - **The cheapest next experiment** is to point the test listener rule at `blue`
+>   instead of `green`, inverting Terraform's initial assignment, and deploy once.
+>   If alternation then engages, the fix is one line; if not, everything
+>   reproducible from outside has been reproduced and it is a support case.
+>
+> Until it is resolved, the honest description of production is **a rolling
+> deployment with a bake period, alarm-triggered rollback and three Lambda hooks,
+> none of which observes the new revision in isolation.**
+
+> **Amended in execution (2026-08-31) — the dark canary rolled back a good
+> deployment on a TLS handshake.** Full record: [the transport
+> timeout](./phases/phase6/2026-08-31-dark-canary-transport-timeout.md).
+>
+> - **One deployment in four was reversed for a network event**, not a bad build:
+>   `/health was unreachable after 10s: The handshake operation timed out`,
+>   surfaced to the operator as `HookStatus must not be null` — a parse error
+>   three hops from the cause.
+> - **Only the hook that probes `:8443` failed** — 1 of 4, against 0 of 4 and 0
+>   of 3 for the two that probe `:443`. That follows from the design rather than
+>   from luck: the test listener carries no traffic except during a deployment, so
+>   every probe of it is a cold connection paying DNS, TCP and a full TLS
+>   handshake, while the production listener is always warm.
+> - **The timeout policy is inverted.** `/ready` holds a 30-second floor because
+>   Phase 5 §F5 measured it taking 25.6s to *fail*; `/health` holds 10 seconds and
+>   is probed **first**, so the request with the least budget is the one paying to
+>   establish the connection.
+> - **The fix is to separate transport failures from application failures** — a
+>   503 is the verdict the hook exists to produce and must never be retried; a
+>   handshake timeout means no conversation happened and nothing has been learned.
+>   `_probe` collapses both into `HookRejected`.
+> - **Deliberately not applied in this session.** A change that makes this gate
+>   retry is a change that makes it more willing to pass, and it is the only thing
+>   standing between a bad build and production. It wants its own branch — and it
+>   should follow the isolation fix, since until then the hook is not judging the
+>   right revision anyway.
 
 ### Phase 7 — Infrastructure pipeline
 
@@ -1039,6 +1125,36 @@ Only images flow through this pipeline. Task definition and service shape stay o
 > 3, 5, 6, 7, 8 and 9 did, so the absence reads as checked rather than
 > overlooked.
 
+> **Amended in execution (2026-08-31) — `make teardown` could not destroy either
+> environment layer, and the cycle has now been run.** Full record: [teardown
+> could not destroy](./phases/phase10/2026-08-31-teardown-could-not-destroy.md).
+>
+> - **Both environment layers declare `image_tag` with no default** (Phase 5 §D3),
+>   and Terraform requires a value for a **destroy** exactly as for an apply.
+>   `rebuild.sh` resolved it from SSM; `teardown.sh` passed no variables at all.
+>   The command that exists to destroy `prod` and `staging` could destroy
+>   neither. Two scripts written in the same phase, to the same plan, diverged on
+>   the one input both needed.
+> - **Nothing could have caught it offline.** The phase created no AWS resource,
+>   and the shell suite drives a fake AWS CLI that answers every call and
+>   therefore never reaches Terraform's variable validation. That is the boundary
+>   of the offline gate, not a defect in it — and it is exactly why the fourth
+>   bullet above asks for a cycle *executed*, not written.
+> - **`resolve_image_tag` moves into `lib/common.sh`** rather than being copied,
+>   because the divergence between the two scripts was the defect.
+> - **A second defect in the same command**: `read_deployed_scope` reported
+>   "apply the foundation layer" for *any* failure of one API call, with
+>   `2>/dev/null` discarding the evidence. A transient failure sent an operator to
+>   apply a layer that was already applied. **A confident diagnosis attached to a
+>   generic failure is worse than none**, because it sends the reader somewhere
+>   specific and wrong.
+> - **The cycle then ran end to end** — prod destroyed, recreated from nothing,
+>   smoke-tested, marker restored. The first half of the exit criterion is met for
+>   real. The marker also behaved correctly under the *failure*, which is better
+>   evidence than a clean run: it read `staging` while prod was still up, so both
+>   pipelines skipped a layer whose state was unknown rather than deploying into
+>   it.
+
 ### Phase 11 — Rollback evidence and documentation
 
 You drive this phase; Claude writes the runbooks and prepares the broken build.
@@ -1069,6 +1185,10 @@ The design document's risk table (§11) still stands. These are added or changed
 | **A file becomes pipeline content without joining the trigger** | Found three times — `scripts/tf.sh` (Phase 8), `lambdas/**` (Phase 9), `scripts/lint-infra.sh` (2026-08-31). Each surfaced only when somebody finally edited the file. The trigger is now at `filePaths.includes`'s eight-pattern maximum, so the next occurrence costs a second `push` block rather than a line. |
 | **The infra pipeline manages the layer containing itself** | Expected. A broken pipeline definition is repaired by a local `terraform apply`; the runbook documents this. **Extended 2026-08-31:** the *successful* case also bites. Applying a change to `aws_codepipeline.infra` cancels the in-flight execution — `statusSummary: "Pipeline definition was updated"` — with every action green, so Network, Staging and Prod never run. A `foundation` change that alters the pipeline's own definition therefore takes **two runs**, and the first one's cancellation is easily misread as a failure. |
 | **Repeated teardown and rebuild cycles surface latent IaC gaps** | This is the point of Phase 10 rather than a risk to avoid. Gaps found there are bugs in the IaC, and fixing them is in scope. **Fired 2026-08-31, before any cycle ran:** the `PRE_SCALE_UP` hook made creating the prod service impossible, so `make rebuild` could never have restored production. Found by the application pipeline rather than by a teardown, which is luck — a cycle would have found it, one phase later, with the environment already destroyed. |
+| **The blue/green mechanism may not separate the colours at all** | **Open, and it fired.** Four deployments, two services, one full teardown and rebuild: every revision registers into the same target group and the alternate is never used. The test listener therefore cannot isolate the new revision, and the hook this project's safety argument rests on has validated the outgoing revision three times running. Configuration verified correct; cause unknown. See [the record](./phases/phase6/2026-08-31-blue-green-does-not-isolate.md). |
+| **A caveat written inside a comment about something else is invisible to later phases** | New. Phase 5 recorded that staging's apply returns before the service stabilises, inside a comment explaining IAM ordering. Phase 8 attached a smoke test to that apply and the two were never connected until the smoke test failed in production. Mitigation is not more comments: it is that a caveat which constrains a *future* phase belongs in that phase's section of this roadmap, where the phase's author will read it. |
+| **An offline gate cannot reach a real API's validation** | New, from `make teardown` being unable to destroy either environment layer for want of a variable. The shell suite drives a fake CLI and the Terraform suite drives mocked providers; both are valuable and neither can find a defect that only the real service rejects. Every "the branch's gate is green" claim in this document is bounded by that, and the runbooks exist to close the gap. |
+| **A confident diagnosis on a generic failure sends the reader somewhere wrong** | New. `read_deployed_scope` reported "apply the foundation layer" for any failure of one API call, having discarded stderr. The remedy is to name a specific cause only when it has been identified, and otherwise report what the underlying tool said. |
 | **A gate can be unsatisfiable on the path that creates the thing it guards** | New, and generalised from the row above. A check written for the steady state — "is production healthy?" — may have no valid answer at creation time, when the thing being checked does not exist yet. It fails closed, which is correct behaviour producing an impossible outcome. Every hook, alarm and health gate is worth re-reading with "what does this return when the environment is empty?" in mind, because destroy-when-idle means the empty case is routine here rather than exceptional. |
 | **ACM certificate is in `foundation`, ALBs are in the environment layers** | The certificate outlives teardown, so listeners reference it through remote state. No re-issuance on rebuild. |
 

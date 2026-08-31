@@ -339,6 +339,16 @@ aws ecs stop-service-deployment --service-deployment-arn "$DEPLOYMENT"
 
 ## 13. Exit criterion 2 — different SHAs on `:443` and `:8443`
 
+> **This step cannot pass as the layer is currently configured, and that is a
+> defect rather than a mistake in the step.** *(Added 2026-08-31.)* Every
+> revision registers into the same target group — `blue` has never held a
+> target across four deployments and a full teardown and rebuild — so both
+> listeners resolve to one mixed pool and the two ports return whichever task
+> the load balancer happens to pick. Do not spend time trying to catch the
+> window; there is no window. Read [blue/green does not
+> isolate](../phases/phase6/2026-08-31-blue-green-does-not-isolate.md) first,
+> and treat its §5 experiment as the prerequisite for this step.
+
 **This is the direct proof of which colour serves whom, and the window is a few
 minutes wide.** Have this loop running in a third terminal *before* you start
 step 12:
