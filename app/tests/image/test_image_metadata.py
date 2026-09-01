@@ -33,3 +33,16 @@ def test_image_digest_is_unknown_until_terraform_injects_it(client: httpx2.Clien
     the deliberate gap so that closing it wrongly, at build time, is a red test.
     """
     assert client.get("/version").json()["image_digest"] == "unknown"
+
+
+def test_release_color_reaches_the_image(client: httpx2.Client) -> None:
+    """The tint the demonstration rests on is a build argument like any other.
+
+    If RELEASE_COLOR does not reach the image, the page renders the "slate"
+    default and both listeners show the same colour during a shift — which
+    looks like a blue/green failure and is not one. Two causes, one symptom;
+    this is the test that rules out the boring cause before anybody starts
+    reading CloudTrail for the interesting one.
+    """
+    expected = (APP_ROOT / "RELEASE_COLOR").read_text().strip()
+    assert client.get("/version").json()["release_color"] == expected

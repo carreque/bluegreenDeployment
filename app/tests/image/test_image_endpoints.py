@@ -67,3 +67,21 @@ def test_a_missing_account_is_a_problem_document(client: httpx2.Client) -> None:
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["code"] == "ACCOUNT_NOT_FOUND"
+
+
+def test_the_demonstration_page_ships_in_the_image(client: httpx2.Client) -> None:
+    """F4 reasons that static/ is covered by `COPY src/`. This checks it.
+
+    The failure mode if it is not: `make test` stays green, because the tests
+    read the files from the working copy, and the deployed container answers
+    500 on `/` — found in a browser rather than in CI.
+    """
+    page = client.get("/")
+    assert page.status_code == 200, page.text
+    assert page.headers["content-type"] == "text/html; charset=utf-8"
+
+    for path, media_type in (("/app.css", "text/css"), ("/app.js", "text/javascript")):
+        asset = client.get(path)
+        assert asset.status_code == 200, path
+        assert asset.headers["content-type"] == f"{media_type}; charset=utf-8"
+        assert asset.headers["cache-control"] == "no-store"
