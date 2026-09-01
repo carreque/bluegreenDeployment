@@ -105,7 +105,8 @@ version_gte() {
 
 # image_build_identity — set the variables that identify an image build.
 #
-# Sets APP_VERSION, GIT_SHA, BUILT_AT, IMAGE_REF and exports SOURCE_DATE_EPOCH.
+# Sets APP_VERSION, GIT_SHA, BUILT_AT, RELEASE_COLOR, IMAGE_REF and exports
+# SOURCE_DATE_EPOCH.
 #
 # This lives here rather than in build-image.sh because verify-image-repeatability.sh
 # needs the identical derivation: if the two computed a tag differently — say one
@@ -159,6 +160,13 @@ image_build_identity() {
 
   major_minor="$(tr -d '[:space:]' <"$root/app/VERSION")"
   APP_VERSION="${major_minor}.${CODEBUILD_BUILD_NUMBER:-0}"
+
+  # Phase 12. Read from the repository rather than the environment, because a
+  # build input that comes from the operator's shell is not a function of the
+  # source — and design §4.1 requires that two clean builds of one commit
+  # produce the same digest. A colour flip is therefore a commit that flows
+  # through the real pipeline, not a setting somebody exports. Plan D3.
+  RELEASE_COLOR="$(tr -d '[:space:]' <"$root/app/RELEASE_COLOR")"
 
   GIT_SHA="$(git -C "$root" rev-parse --short=7 HEAD)"
   if [[ -n "$(git -C "$root" status --porcelain)" ]]; then

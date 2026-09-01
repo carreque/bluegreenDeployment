@@ -39,6 +39,7 @@ mkdir -p "$DIST"
 
 info "building $IMAGE_REF"
 dim "  platform           $PLATFORM"
+dim "  release colour     $RELEASE_COLOR"
 dim "  SOURCE_DATE_EPOCH  $SOURCE_DATE_EPOCH ($BUILT_AT)"
 
 # Two exporters, one build. The OCI archive is the artifact; the docker export
@@ -55,6 +56,7 @@ docker buildx build \
   --build-arg "APP_VERSION=$APP_VERSION" \
   --build-arg "GIT_SHA=$GIT_SHA" \
   --build-arg "BUILT_AT=$BUILT_AT" \
+  --build-arg "RELEASE_COLOR=$RELEASE_COLOR" \
   --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
   --output "type=oci,dest=$DIST/image.oci.tar,rewrite-timestamp=true,name=$IMAGE_REF" \
   --output "type=docker,name=$IMAGE_REF" \

@@ -17,6 +17,7 @@ Planned, in the order they are needed:
 | [The observability plane apply, a deliberate pipeline failure, and the dashboard's first real data](./phase-09-observability.md) | 9 |
 | [Teardown, the idle check, and the rebuild — what survives, what does not, how long it takes](./phase-10-teardown-and-rebuild.md) | 10 |
 | The three rollback demonstrations | 11 |
+| [The demonstration page: the local two-colour preview, the live shift, and reading it honestly](./phase-12-frontend-demo.md) | 12 |
 
 From Phase 7 the infra pipeline applies `infra/`, and **merging to `main` is
 what fires a deployment** (roadmap §2.1). The four manual approvals are what
@@ -48,6 +49,13 @@ email at 3am, because those alarms now notify. The Phase 9 runbook's steps 8,
 10 and 12 exist specifically to settle what could not be checked with no AWS
 session: the real ECS event vocabulary, whether a dashboard widget's `SEARCH`
 actually matches anything, and the real alarm thresholds under real traffic.
+
+Phase 12 adds the demonstration page and its runbook. It creates nothing: the
+page ships inside the application image, both listener rules already match
+`/*`, and the release colour arrives as a build argument rather than through
+the task definition. The runbook's section B is also the pipeline-path
+re-confirmation that Phase 6's §7 left open — a colour flip is an `app/**`
+commit, so the demonstration and the re-confirmation are the same run.
 
 The project has exactly **three** irreducibly manual steps, all in Phase 3:
 authorising the CodeConnections link, confirming the SNS email subscription, and

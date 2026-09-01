@@ -1,0 +1,153 @@
+/* The whole palette hangs off one attribute on <html>, set by app.js from
+   /version. Changing the tint at runtime is therefore one setAttribute, and
+   the page states its build identity in the banner as well as the button —
+   this is going to be screenshotted and read from across a room.
+
+   Contrast: every --accent below clears WCAG AA against #ffffff ink at the
+   button's weight. If a colour is adjusted, that is the constraint to keep. */
+:root[data-release-color="blue"]    { --accent: #1f6feb; --accent-ink: #ffffff; }
+:root[data-release-color="green"]   { --accent: #1a7f37; --accent-ink: #ffffff; }
+:root[data-release-color="slate"]   { --accent: #57606a; --accent-ink: #ffffff; }
+/* Before the first successful poll, and after a failed one. Deliberately drab:
+   an untinted page must not be mistaken for a deployed colour. */
+:root[data-release-color="unknown"] { --accent: #d0d7de; --accent-ink: #24292f; }
+
+:root {
+  --page: #f6f8fa;
+  --ink: #1f2328;
+  --muted: #656d76;
+  --line: #d0d7de;
+  --card: #ffffff;
+  --danger: #cf222e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 0 3rem;
+  background: var(--page);
+  color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+.banner {
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 1.5rem 2rem;
+}
+
+.banner__label {
+  margin: 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.banner__colour {
+  margin: 0.2rem 0 0.8rem;
+  font-size: clamp(2.5rem, 9vw, 5rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.banner__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.banner__facts dt { opacity: 0.8; }
+.banner__facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.banner__caveat {
+  margin: 0.9rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+main {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 46rem;
+  margin: 2rem auto 0;
+  padding: 0 1rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.5rem;
+}
+
+h1, h2 { margin-top: 0; font-size: 1.25rem; }
+
+form { display: grid; gap: 0.35rem; }
+
+label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+input, select {
+  padding: 0.55rem 0.7rem;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  background: var(--card);
+  color: var(--ink);
+}
+
+button.accent {
+  justify-self: start;
+  padding: 0.7rem 1.6rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.accent:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+.alert {
+  margin: 1rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 4px solid var(--danger);
+  background: #ffebe9;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.accounts { list-style: none; margin: 0; padding: 0; }
+
+.account {
+  display: grid;
+  grid-template-columns: 1fr max-content;
+  gap: 0.1rem 1rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.account:last-child { border-bottom: 0; }
+.account__name { font-weight: 600; }
+.account__balance { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.account__origin {
+  grid-column: 1 / -1;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.empty { color: var(--muted); font-size: 0.9rem; }

@@ -15,6 +15,7 @@ def client() -> TestClient:
         git_sha="deadbee",
         image_digest="sha256:abc123",
         built_at="2026-08-05T10:00:00Z",
+        release_color="green",
     )
     return TestClient(create_app(repository=InMemoryLedgerRepository(), settings=settings))
 
@@ -58,14 +59,28 @@ def test_ready_returns_503_when_the_store_is_unreachable() -> None:
 def test_version_reports_the_injected_build_metadata(client) -> None:
     """Phase 6 curls this against :443 and :8443 during a blue/green shift.
     Two different git_sha values is the direct proof of which colour serves
-    whom, so these four fields are a contract with Phase 6, not decoration."""
+    whom, so these fields are a contract with Phase 6, not decoration.
+
+    Phase 12 adds release_color and polls this endpoint from the browser every
+    two seconds; the field is the page's entire input.
+    """
     body = client.get("/version").json()
     assert body == {
         "version": "1.2.345",
         "git_sha": "deadbee",
         "image_digest": "sha256:abc123",
         "built_at": "2026-08-05T10:00:00Z",
+        "release_color": "green",
     }
+
+
+def test_version_is_never_cached(client) -> None:
+    """The whole demonstration is 'which build answered this request'.
+
+    A cached /version defeats it silently: the page keeps showing the previous
+    build's colour after a shift and looks like it is working. Phase 12, D8.
+    """
+    assert client.get("/version").headers["cache-control"] == "no-store"
 
 
 def test_every_response_carries_a_request_id_header(client) -> None:

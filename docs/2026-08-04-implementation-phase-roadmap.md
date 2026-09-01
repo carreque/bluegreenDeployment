@@ -111,7 +111,7 @@ Two consequences the detailed plan accounts for:
 
 ## 3. Phase roadmap
 
-Twelve phases. Phases 0–2 cost nothing on AWS. Phase 3 starts minimal spend. Phase 4 onward is when the monthly estimate applies.
+Thirteen phases. Phases 0–2 cost nothing on AWS. Phase 3 starts minimal spend. Phase 4 onward is when the monthly estimate applies.
 
 | # | Phase | Depends on | AWS cost from here |
 |---|---|---|---|
@@ -127,6 +127,7 @@ Twelve phases. Phases 0–2 cost nothing on AWS. Phase 3 starts minimal spend. P
 | 9 | Observability and release metrics | 8 | — |
 | 10 | Teardown and rebuild automation | 9 | reduces idle cost to ~$1/mo |
 | 11 | Rollback evidence and documentation | 10 | — |
+| 12 | Demonstration frontend | 8 | — |
 
 ### Phase 0 — Prerequisites and repository scaffolding
 
@@ -1232,6 +1233,24 @@ You drive this phase; Claude writes the runbooks and prepares the broken build.
 
 **Exit criteria:** three demonstrations captured with evidence; documentation complete.
 
+### Phase 12 — Demonstration frontend
+
+Everything the previous eleven phases prove about this platform's release behaviour is textual: a `git_sha` in a JSON body, an entry in CloudTrail, a metric in a namespace. This phase adds the one surface that can be pointed at rather than read out — a page, served by the task itself, whose submit button is tinted by the build that served it.
+
+Depends on Phase 8 rather than on Phase 11, and could be executed at any point after it. It sits here because the mechanism is worth proving before the presentation layer that shows it off.
+
+- A **release colour** as a build input: `app/RELEASE_COLOR`, read by `image_build_identity()` beside `app/VERSION`, injected as a Docker build argument and surfaced by `/version` alongside `version`, `git_sha` and `built_at`. **A file in the repository, not an environment variable** — design §4.1 requires the image digest to be a function of the source, and a build input taken from the operator's shell is not one.
+- A **single page** in the container: a create-account form whose submit button carries the colour, the account list it writes into, and a banner polling `/version` every two seconds. Three static files under `app/src/bgd/api/static/`, no template engine, no bundler, no new runtime dependency.
+- The page **learns its colour by fetching `/version`** rather than by being templated, so a tab left open on the production listener re-tints itself the moment ECS moves the listener rule. You watch the shift rather than reloading to discover it.
+- A **CSP with no `unsafe-inline`**, and an account list built with `textContent` — the page renders `owner_name`, which is user-supplied and stored.
+- **No Terraform, no pipeline change, no AWS resource.** Both listener rules already match `/*`, the test listener is already open to the internet on 8443, and the colour arrives inside the image rather than through the task definition — which keeps colour assignment where Phase 6 put it.
+
+> **The colour names the build, not the target group.** Which colour slot is serving is ECS's to assign; `prod/alb.tf` hands it over with `ignore_changes` and `scripts/lint-infra.sh` fails the build if anyone takes it back. The demonstration works because a shift is precisely the state in which two different builds are reachable at two different listeners — the production listener serves the incumbent, the test listener serves the candidate.
+
+> **This phase displays a mechanism; it does not prove one.** Phase 6 proved it, and its [isolation defect](./phases/phase6/2026-08-31-blue-green-does-not-isolate.md) closed on 2026-09-01 — colours alternating across three deployments, the dark canary reading the incoming revision both times. The evidence of record stays the sampling log in `docs/evidence/`; this page is what you put on a screen. One useful side effect: a colour flip is a pipeline deployment, so the demonstration is also the pipeline-path re-confirmation that Phase 6's §7 left open.
+
+**Exit criteria:** during a production shift the two listeners serve visibly different buttons, captured as a screenshot; `/version` on the deployed task reports a `release_color` matching the commit that built the image; and two clean builds of one commit still produce the same manifest digest.
+
 ---
 
 ## 4. Risks carried forward
@@ -1248,7 +1267,7 @@ The design document's risk table (§11) still stands. These are added or changed
 | **A file becomes pipeline content without joining the trigger** | Found three times — `scripts/tf.sh` (Phase 8), `lambdas/**` (Phase 9), `scripts/lint-infra.sh` (2026-08-31). Each surfaced only when somebody finally edited the file. The trigger is now at `filePaths.includes`'s eight-pattern maximum, so the next occurrence costs a second `push` block rather than a line. |
 | **The infra pipeline manages the layer containing itself** | Expected. A broken pipeline definition is repaired by a local `terraform apply`; the runbook documents this. **Extended 2026-08-31:** the *successful* case also bites. Applying a change to `aws_codepipeline.infra` cancels the in-flight execution — `statusSummary: "Pipeline definition was updated"` — with every action green, so Network, Staging and Prod never run. A `foundation` change that alters the pipeline's own definition therefore takes **two runs**, and the first one's cancellation is easily misread as a failure. |
 | **Repeated teardown and rebuild cycles surface latent IaC gaps** | This is the point of Phase 10 rather than a risk to avoid. Gaps found there are bugs in the IaC, and fixing them is in scope. **Fired 2026-08-31, before any cycle ran:** the `PRE_SCALE_UP` hook made creating the prod service impossible, so `make rebuild` could never have restored production. Found by the application pipeline rather than by a teardown, which is luck — a cycle would have found it, one phase later, with the environment already destroyed. |
-| **The blue/green mechanism may not separate the colours at all** | **Open, and it fired.** Four deployments, two services, one full teardown and rebuild: every revision registers into the same target group and the alternate is never used. The test listener therefore cannot isolate the new revision, and the hook this project's safety argument rests on has validated the outgoing revision three times running. Configuration verified correct; cause unknown. See [the record](./phases/phase6/2026-08-31-blue-green-does-not-isolate.md). |
+| **The blue/green mechanism may not separate the colours at all** | **It fired.** Four deployments, two services, one full teardown and rebuild: every revision registered into the same target group and the alternate was never used. The test listener could not isolate the new revision, and the hook this project's safety argument rests on validated the outgoing revision three times running. Configuration verified correct; ~~cause unknown~~. **Closed 2026-09-01: the defect was the re-declaration, not the declaration.** ECS chooses the live colour by *reading* the production listener rule — not by swapping `alternate_target_group_arn` — and neither `aws_lb_listener_rule` carried `ignore_changes = [action]`. ECS's rewrite therefore read as drift, and every apply reverted it seconds before the deployment that apply had just started, which made green an attractor the create entered immediately. Two lifecycle blocks fix it; `terraform test` cannot see lifecycle meta-arguments, so `scripts/lint-infra.sh` carries a textual guard and says where it is weak. Verified end to end against a real account: `terraform plan` clean over rules ECS had already moved, the colours alternating across three deployments in both directions, the dark canary reading the incoming revision both times, and all nine `ModifyRule` calls from the blue/green role. **One narrow item remains** — both verification deployments ran through `scripts/tf.sh apply prod`, so the pipeline path has not been re-run since the fix; [Phase 12](#phase-12--demonstration-frontend)'s demonstration is that re-run. See [the record](./phases/phase6/2026-08-31-blue-green-does-not-isolate.md) §7. |
 | **A caveat written inside a comment about something else is invisible to later phases** | New. Phase 5 recorded that staging's apply returns before the service stabilises, inside a comment explaining IAM ordering. Phase 8 attached a smoke test to that apply and the two were never connected until the smoke test failed in production. Mitigation is not more comments: it is that a caveat which constrains a *future* phase belongs in that phase's section of this roadmap, where the phase's author will read it. |
 | **An offline gate cannot reach a real API's validation** | New, from `make teardown` being unable to destroy either environment layer for want of a variable. The shell suite drives a fake CLI and the Terraform suite drives mocked providers; both are valuable and neither can find a defect that only the real service rejects. Every "the branch's gate is green" claim in this document is bounded by that, and the runbooks exist to close the gap. |
 | **A confident diagnosis on a generic failure sends the reader somewhere wrong** | New. `read_deployed_scope` reported "apply the foundation layer" for any failure of one API call, having discarded stderr. The remedy is to name a specific cause only when it has been identified, and otherwise report what the underlying tool said. |

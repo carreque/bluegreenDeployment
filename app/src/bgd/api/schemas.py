@@ -29,6 +29,11 @@ class VersionResponse(BaseModel):
     git_sha: str
     image_digest: str
     built_at: str
+    # A token, never a hex value: the CSS owns what blue looks like (D6).
+    # `str` rather than the settings' Literal — Settings is the validation
+    # boundary, and re-validating here would only create a second place to
+    # edit when a colour is added.
+    release_color: str
 
 
 class AccountCreateRequest(BaseModel):

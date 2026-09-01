@@ -44,6 +44,7 @@ build_once() {
     --build-arg "APP_VERSION=$APP_VERSION" \
     --build-arg "GIT_SHA=$GIT_SHA" \
     --build-arg "BUILT_AT=$BUILT_AT" \
+    --build-arg "RELEASE_COLOR=$RELEASE_COLOR" \
     --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
     --output "type=oci,dest=$WORK/$label.tar,rewrite-timestamp=true,name=$IMAGE_REF" \
     "$APP" >/dev/null 2>&1

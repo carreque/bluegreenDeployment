@@ -50,3 +50,19 @@ def test_bytecode_is_excluded_recursively_not_just_at_the_root() -> None:
     patterns = _dockerignore_patterns()
     for expected in ("**/__pycache__", "**/*.pyc"):
         assert expected in patterns, f".dockerignore must exclude {expected} recursively"
+
+
+RELEASE_COLORS = frozenset({"blue", "green", "slate"})
+
+
+def test_release_color_is_one_of_the_three_tokens() -> None:
+    """Read by `tr -d '[:space:]'` in shell and `.strip()` in Python.
+
+    Anything else — a comment, a second line, a capital B — reaches the image
+    as BGD_RELEASE_COLOR and is rejected by Settings at startup.
+    """
+    raw = (APP_ROOT / "RELEASE_COLOR").read_text()
+    assert raw.strip() in RELEASE_COLORS, (
+        f"RELEASE_COLOR must be one of {sorted(RELEASE_COLORS)}, got {raw!r}"
+    )
+    assert raw == raw.strip() + "\n", "RELEASE_COLOR must be exactly one token and one newline"

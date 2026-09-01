@@ -80,9 +80,18 @@ FROM ${BASE_IMAGE} AS runtime
 # an image cannot carry its own digest, because the digest is its hash. Phases 5
 # and 6 set it in the ECS task definition, which is the only place that knows
 # which digest is actually deployed.
+#
+# RELEASE_COLOR is the opposite case, and Phase 12 added it for that reason: a
+# value that *can* be a function of the source, and therefore is. It comes from
+# app/RELEASE_COLOR in the repository rather than from the operator's shell, so
+# the digest stays reproducible across machines (plan D3). The default matches
+# the settings default, so a plain `docker build` — compose, or anything
+# bypassing scripts/build-image.sh — produces a container that reports "slate"
+# rather than one that fails validation at startup.
 ARG APP_VERSION=0.0.0-dev
 ARG GIT_SHA=unknown
 ARG BUILT_AT=unknown
+ARG RELEASE_COLOR=slate
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app/src \
@@ -90,7 +99,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     BGD_APP_VERSION=${APP_VERSION} \
     BGD_GIT_SHA=${GIT_SHA} \
-    BGD_BUILT_AT=${BUILT_AT}
+    BGD_BUILT_AT=${BUILT_AT} \
+    BGD_RELEASE_COLOR=${RELEASE_COLOR}
 
 # Standard OCI provenance, and the handle the build script's cleanup uses:
 # every build loads a new image under the same tag and orphans the previous

@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from bgd.config import Settings, get_settings
 
 
@@ -35,3 +38,29 @@ def test_unprefixed_environment_is_ignored(monkeypatch) -> None:
 
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
+
+
+def test_release_color_defaults_to_neither_demo_colour() -> None:
+    """A container started without build arguments must not look deployed.
+
+    compose, a bare uvicorn and every test run land here. If this defaulted to
+    blue, a local window would be indistinguishable from a production one in a
+    screenshot. Phase 12 plan, D6.
+    """
+    assert Settings(_env_file=None).release_color == "slate"
+
+
+def test_release_color_is_read_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("BGD_RELEASE_COLOR", "green")
+    assert Settings(_env_file=None).release_color == "green"
+
+
+def test_an_unknown_release_color_is_rejected(monkeypatch) -> None:
+    """A typo in app/RELEASE_COLOR is a container that refuses to start.
+
+    The alternative is an untinted button discovered in front of an audience,
+    which is the same defect found several hours later.
+    """
+    monkeypatch.setenv("BGD_RELEASE_COLOR", "purple")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
