@@ -33,6 +33,16 @@
 # to staging rather than inventing a smoke stage of its own. The sixth is the
 # same idea applied to Phase 12's build input.
 #
+# Five and six WARN rather than fail on an image that predates Phase 12, which
+# is a different thing from a broken one. Such an image has no release_color at
+# all and serves no page, and putting one back is a legitimate operation: a
+# rebuild takes its tag from /bgd/<env>/image_tag, the last thing deployed, so
+# the first rebuild after Phase 12 merged restores exactly such an image — and
+# Phase 11's rollbacks restore them on purpose. Failing there reported a
+# correct restore as a broken deploy, and stopped scripts/rebuild.sh before it
+# reached prod. "slate" stays a hard failure: that is a Phase 12-aware image
+# built without the build argument, which is the defect check 6 exists for.
+#
 # The URL and digest come from Terraform outputs by default. Both can be
 # overridden by environment variable so Phase 8's CodeBuild can pass them
 # directly rather than needing the state backend:
@@ -161,6 +171,22 @@ else
   fi
 fi
 
+# Whether this image predates Phase 12 — the one signal checks 5 and 6 share.
+#
+# /version's release_color is authoritative: an image built before the phase
+# has no such field, one built since always has one. Derived once, here,
+# because the two checks must agree — a pre-Phase-12 image legitimately serves
+# no page AND reports no colour, and letting each decide for itself would
+# report one old image as two unrelated defects.
+pre_phase12=false
+reported=""
+if [[ -n "$VERSION_BODY" ]]; then
+  reported="$(printf '%s' "$VERSION_BODY" | jq -r '.release_color // empty')"
+  if [[ -z "$reported" ]]; then
+    pre_phase12=true
+  fi
+fi
+
 # 5. The demonstration page is being served. Phase 12.
 #
 # --output /dev/null and a --write-out format, rather than probe(): this is the
@@ -173,8 +199,12 @@ case "$page" in
   "200 text/html"*) mark_ok ;;
   "") mark_fail "no response within 10s"
      failures=$((failures + 1)) ;;
-  *) mark_fail "expected 200 text/html, got '$page'"
-     failures=$((failures + 1)) ;;
+  *) if [[ "$pre_phase12" == true ]]; then
+       mark_warn "no page — this image predates Phase 12 (got '$page')"
+     else
+       mark_fail "expected 200 text/html, got '$page'"
+       failures=$((failures + 1))
+     fi ;;
 esac
 
 # 6. The image carries a release identity, and it is not the local default.
@@ -188,11 +218,9 @@ if [[ -z "$VERSION_BODY" ]]; then
   mark_fail "no /version response to check"
   failures=$((failures + 1))
 else
-  reported="$(printf '%s' "$VERSION_BODY" | jq -r '.release_color // empty')"
   case "$reported" in
     blue | green) mark_ok ;;
-    "") mark_fail "/version reports no release_color — this image predates Phase 12"
-       failures=$((failures + 1)) ;;
+    "") mark_warn "no release_color — this image predates Phase 12; a restore or a rollback is entitled to put one back" ;;
     slate) mark_fail "/version reports 'slate' — RELEASE_COLOR never reached the image; check both --build-arg lines"
        failures=$((failures + 1)) ;;
     *) mark_fail "/version reports '$reported', which is not a release colour"

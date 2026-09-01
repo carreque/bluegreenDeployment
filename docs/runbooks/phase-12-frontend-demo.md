@@ -137,3 +137,5 @@ One more row, for the symptom that will actually happen first:
 | Symptom | Cause |
 |---|---|
 | the banner reads `slate` on a deployed host | the image was built without the build argument, or by `docker compose`. A deployed `slate` is check 6's failure; it is never correct |
+| `make rebuild` stops at staging, with checks 5 and 6 red | the image being restored predates Phase 12. `scripts/rebuild.sh` takes its tag from `/bgd/<env>/image_tag` — the last thing actually deployed — so the first rebuild after this phase merged restores an image with no page and no `release_color`. Since 2026-09-01 both checks **warn** rather than fail on that image and the rebuild continues; if you are on an older `smoke.sh`, run `make build && make seed-ecr` first to record a Phase 12 tag |
+| a rollback to an older image reports checks 5 and 6 red | the same cause, and the same fix. Phase 11 restores pre-Phase-12 images on purpose; a correct rollback must not read as a broken deploy |
