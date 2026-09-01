@@ -55,6 +55,7 @@ the transaction record and the account balance in a single atomic
 | `GET` | `/health` | `200` | — liveness only, never touches DynamoDB |
 | `GET` | `/ready` | `200` | `503` when DynamoDB is unreachable |
 | `GET` | `/version` | `200` | — |
+| `GET` | `/` | `200` `text/html` | — the demonstration page; `/app.css` and `/app.js` beside it |
 | `POST` | `/api/accounts` | `201` + `Location` | `422` validation |
 | `GET` | `/api/accounts` | `200` | `422` bad `limit` |
 | `GET` | `/api/accounts/{account_id}` | `200` | `404` |
@@ -72,6 +73,13 @@ healthy task at once.
 `/version` is load-bearing: during a blue/green shift it is curled against the
 `:443` and `:8443` listeners at the same time, and the two different SHAs are the
 direct proof of which colour serves whom.
+
+`/version` also reports `release_color`, which the page at `/` polls every two
+seconds and tints itself from. **The colour names the build, not the ECS target
+group** — which colour slot is serving is ECS's to assign, and nothing in a
+task can read it. Two windows showing two colours during a shift is two
+*builds* being reachable at two listeners, which is exactly what a blue/green
+deployment is.
 
 ## The image
 
@@ -97,6 +105,14 @@ function of the source; `make image-verify` proves it, and it only works through
 `image_digest` stays `unknown` in the image, because an image cannot contain its
 own hash: the ECS task definition supplies it in Phases 5 and 6, and
 `make run-image` supplies it locally.
+
+`release_color` comes from `app/RELEASE_COLOR`, a file in the repository rather
+than an environment variable, so the digest stays a function of the source and
+a colour flip is a real commit through the real pipeline. To see two colours
+locally: build with `blue`, run `scripts/run-image.sh`, edit the file to
+`green`, `make build` again, and run the second one with
+`PORT=8082 scripts/run-image.sh`. Compose cannot do this — it passes no build
+arguments, so both services would report `slate`.
 
 For the whole stack in containers, `make local-tables` once and then
 `docker compose --profile app up`. The `app` profile keeps that container out of
