@@ -31,16 +31,25 @@ def ready(repository: RepositoryDep, response: Response) -> ReadyResponse:
 
 
 @router.get("/version", response_model=VersionResponse)
-def version(settings: SettingsDep) -> VersionResponse:
+def version(settings: SettingsDep, response: Response) -> VersionResponse:
     """Build identity of the running task.
 
     Phase 6 curls this against the :443 production listener and the :8443 test
     listener during a blue/green shift; two different git_sha values are the
     direct proof of which colour is serving whom.
+
+    Phase 12 polls it from the browser every two seconds and tints the page
+    from release_color, so the same two-listener comparison becomes two
+    colours on two screens rather than two JSON bodies in two terminals.
+
+    no-store because a cached body would keep showing the previous build after
+    a shift — a demonstration that appears to work and is wrong (D8).
     """
+    response.headers["cache-control"] = "no-store"
     return VersionResponse(
         version=settings.app_version,
         git_sha=settings.git_sha,
         image_digest=settings.image_digest,
         built_at=settings.built_at,
+        release_color=settings.release_color,
     )
