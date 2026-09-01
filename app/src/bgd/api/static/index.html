@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en" data-release-color="unknown">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blue/green deployment platform</title>
+<!-- An empty data: icon, deliberately. Without it the browser requests
+     /favicon.ico, the API answers with a 404 problem document, and img-src
+     'none' logs a CSP violation on every load — console noise in front of an
+     audience, for a file that does not exist. -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+<!-- defer, not inline. The CSP has no unsafe-inline (D5), and defer means the
+     script runs after parsing with no DOMContentLoaded race to reason about. -->
+<script src="/app.js" defer></script>
+</head>
+<body>
+
+<header class="banner">
+  <p class="banner__label">this page was served by build</p>
+  <p class="banner__colour" id="release-color">…</p>
+  <dl class="banner__facts">
+    <dt>version</dt><dd id="version">…</dd>
+    <dt>git_sha</dt><dd id="git-sha">…</dd>
+    <dt>image_digest</dt><dd id="image-digest">…</dd>
+    <dt>last checked</dt><dd id="last-checked">never</dd>
+  </dl>
+  <!-- The claim the page makes, narrower than the one a viewer will assume.
+       The colour names the build, not the ECS target group. Phase 12, D2. -->
+  <p class="banner__caveat">The colour names the build, not the target group.</p>
+</header>
+
+<main>
+  <section class="card">
+    <h1>Open an account</h1>
+    <form id="create-account">
+      <label for="owner-name">Owner name</label>
+      <input id="owner-name" name="owner_name" type="text" required maxlength="120"
+             autocomplete="off" placeholder="Ada Lovelace">
+
+      <label for="currency">Currency</label>
+      <!-- A select, not a free-text field: the schema demands ^[A-Z]{3}$ and a
+           select cannot fail it. The error path is exercised by an empty owner
+           name instead, which the API rejects with a problem document. -->
+      <select id="currency" name="currency">
+        <option value="EUR">EUR</option>
+        <option value="GBP">GBP</option>
+        <option value="USD">USD</option>
+      </select>
+
+      <label for="initial-balance">Opening balance (minor units)</label>
+      <input id="initial-balance" name="initial_balance_minor" type="number"
+             min="0" step="1" value="0">
+
+      <button class="accent" type="submit">Open account</button>
+    </form>
+    <p class="alert" id="error" role="alert" hidden></p>
+  </section>
+
+  <section class="card">
+    <h2>Accounts</h2>
+    <ul class="accounts" id="accounts"></ul>
+    <p class="empty" id="accounts-empty">No accounts yet.</p>
+  </section>
+</main>
+
+</body>
+</html>

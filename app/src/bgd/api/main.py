@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from bgd.api.errors import install_exception_handlers
 from bgd.api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
-from bgd.api.routers import accounts, health, transactions
+from bgd.api.routers import accounts, health, transactions, ui
 from bgd.config import Settings, get_settings
 from bgd.logging import configure_logging
 from bgd.repository.base import LedgerRepository
@@ -53,4 +53,10 @@ def create_app(
     app.include_router(health.router)
     app.include_router(accounts.router)
     app.include_router(transactions.router)
+    # Last, and prefix-free. Registered ahead of the others a future "/" route
+    # could shadow an operational path — and the one it would shadow first is
+    # /health, which is what the ALB target group polls. Ordering it last means
+    # a collision is a 404 on the page rather than a service that never goes
+    # healthy. tests/api/test_ui.py asserts all three still answer.
+    app.include_router(ui.router)
     return app
