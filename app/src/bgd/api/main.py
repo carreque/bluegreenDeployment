@@ -8,7 +8,7 @@ DynamoDB implementation built from settings.
 from fastapi import FastAPI
 
 from bgd.api.errors import install_exception_handlers
-from bgd.api.middleware import RequestContextMiddleware
+from bgd.api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from bgd.api.routers import accounts, health, transactions
 from bgd.config import Settings, get_settings
 from bgd.logging import configure_logging
@@ -42,6 +42,12 @@ def create_app(
     app.state.repository = repository
 
     app.add_middleware(RequestContextMiddleware)
+    # After RequestContextMiddleware, which in Starlette means *outermost*:
+    # add_middleware prepends, and the first entry wraps the rest. So this one
+    # sees the response last and appends its headers on top of the request-id
+    # header the inner middleware has already added. Both land; the ordering
+    # only matters if one ever wants to read what the other wrote.
+    app.add_middleware(SecurityHeadersMiddleware)
     install_exception_handlers(app)
 
     app.include_router(health.router)
