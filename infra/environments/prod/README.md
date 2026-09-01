@@ -63,12 +63,27 @@ alone — which is why blue/green needs no edit there.
 It does **not** read `foundation`'s `name_prefix` or `common_tags`. That layer's
 tags say `environment = shared`; this one is `prod`.
 
-## Two things that are not obvious
+## Three things that are not obvious
 
 **Which colour is production is not a property of either target group.** It is
 whichever one the `:443` listener rule currently forwards to, and ECS swaps that
 during every deployment. `blue` in `alb.tf` and `ecs.tf` is the *initial*
 assignment only. Nothing in this layer may assume blue is serving.
+
+**ECS reads that rule to decide where to deploy, so Terraform must not revert
+it.** Both `aws_lb_listener_rule` resources in `alb.tf` carry
+`lifecycle { ignore_changes = [action] }`, and removing either one re-opens the
+defect that
+[kept the two colours in a single target group](../../../docs/phases/phase6/2026-08-31-blue-green-does-not-isolate.md)
+from the layer's creation until 2026-09-01 — silently, with every deployment
+reporting `SUCCESSFUL`. `scripts/lint-infra.sh` fails if either block goes
+missing, because `terraform test` cannot see `lifecycle` meta-arguments.
+
+The asymmetry with `ecs.tf` is deliberate and is argued at the `load_balancer`
+block: `target_group_arn` and `alternate_target_group_arn` declare *which two
+groups*, not which role each holds, and ECS never rewrites them — so that block
+takes no `ignore_changes`, and adding one would cost the two rule ARNs and the
+`bluegreen` role ARN for no benefit.
 
 **Both serving listeners carry a listener rule rather than relying on a default
 action.** `advanced_configuration` takes `production_listener_rule` and

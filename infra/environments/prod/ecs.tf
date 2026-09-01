@@ -181,6 +181,19 @@ resource "aws_ecs_service" "api" {
   # blue and green here are the *initial* assignment only. After the first
   # deployment, which colour is production is ECS's business — nothing in this
   # layer may assume blue is serving.
+  #
+  # And this block takes NO lifecycle ignore_changes, deliberately — unlike the
+  # two listener rules in alb.tf, which need it. The asymmetry is real: ECS
+  # never rewrites these two ARNs. They declare the pair, not the roles; the
+  # role lives on the production listener rule, which is what ECS reads and what
+  # ECS rewrites. Verified 2026-09-01 — the value is identical on every service
+  # revision, and Terraform's UpdateService never sends loadBalancers at all, so
+  # `terraform plan` reports no change here even mid-deployment.
+  #
+  # Ignoring it would also cost something: load_balancer is a set in the
+  # provider schema, so ignore_changes could only take the whole block, and the
+  # two listener rule ARNs and the bluegreen role ARN below would stop being
+  # managed. Real cost, no benefit. See fixIssues.md.
   load_balancer {
     target_group_arn = aws_lb_target_group.blue.arn
     container_name   = local.container_name

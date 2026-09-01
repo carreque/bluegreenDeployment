@@ -170,10 +170,34 @@ resource "aws_lb_listener" "test" {
 # --- the two rules blue/green actually shifts --------------------------------
 #
 # These are what advanced_configuration names, and what ECS rewrites mid-shift.
-# The colours below are the *initial* assignment only: after the first
-# deployment, which rule points at which group is ECS's business and Terraform
-# must not fight it — which is why ecs.tf takes no lifecycle ignore_changes on
-# them, and why nothing else in this layer reads them to decide what is serving.
+# The colours below are the *initial* assignment only.
+#
+# ECS decides which target group is live by READING the production rule — not
+# from alternate_target_group_arn, which declares the pair and never swaps. That
+# was established on 2026-09-01: the service's stored targetGroupArn is
+# identical on every service revision, Terraform's UpdateService never sends
+# loadBalancers at all, and a deployment triggered with the rules left in ECS's
+# own state registered into blue for the first time in the platform's life.
+#
+# So the ignore_changes blocks below are not decoration, and their absence is
+# not neutrality. Without them Terraform reads ECS's rewrite as drift and
+# reverts both rules at the start of the next apply — seconds before the next
+# deployment — telling ECS that blue is live when green is. ECS then puts the
+# incoming revision into green, where the outgoing revision already is, the two
+# colours are never separated, and the production rule spends the shift pointing
+# at an empty group. Blue held zero targets across seven registrations for this
+# reason alone.
+#
+# The drift is structural rather than a colour mismatch — this declares a single
+# target_group_arn where ECS leaves a two-entry weighted forward — so the revert
+# fires on every apply from any state, which is what made the broken state an
+# attractor rather than an accident.
+#
+# Only the forward target is ignored. condition stays managed, so path patterns
+# remain Terraform's.
+#
+# docs/phases/phase6/2026-08-31-blue-green-does-not-isolate.md, and the
+# CloudTrail, plan and live-deployment evidence in fixIssues.md.
 
 resource "aws_lb_listener_rule" "production" {
   listener_arn = aws_lb_listener.https.arn
@@ -188,6 +212,10 @@ resource "aws_lb_listener_rule" "production" {
     path_pattern {
       values = ["/*"]
     }
+  }
+
+  lifecycle {
+    ignore_changes = [action]
   }
 }
 
@@ -204,5 +232,12 @@ resource "aws_lb_listener_rule" "test" {
     path_pattern {
       values = ["/*"]
     }
+  }
+
+  # Both rules, for the reason argued above the production rule. ECS points this
+  # one at the incoming revision during the shift; reverting it would aim the
+  # dark canary at whatever Terraform last declared instead.
+  lifecycle {
+    ignore_changes = [action]
   }
 }

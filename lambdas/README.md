@@ -59,7 +59,7 @@ records what ECS really did with the return value at the first invocation.
 |---|---|---|
 | `BGD_PROBE_URL` | yes | Base URL, no trailing path. `https://api.…` or `https://api.…:8443` |
 | `BGD_STAGE` | yes | The stage this instance is subscribed to. Log context only — the handler does not branch on it |
-| `BGD_TIMEOUT_SECONDS` | no, default 10 | Per-probe timeout. `/ready` is floored at 30 regardless, see below |
+| `BGD_TIMEOUT_SECONDS` | no, default 5 | Per-probe **read** timeout — how long the service has to answer, once a connection exists. `/ready` is floored at 30 regardless, see below. The connection has a separate budget, which is the point |
 | `BGD_EXPECT_DIGEST` | no | When set, additionally asserts `/version`'s `image_digest` equals it |
 
 `BGD_EXPECT_DIGEST` is **never set by Terraform**, deliberately. The third exit
@@ -76,10 +76,48 @@ will not silently fix it for you.
 
 `/ready` is floored at 30 seconds because Phase 5 measured it taking 25.6
 seconds to fail when DynamoDB is unreachable — botocore retries with backoff. A
-10-second probe would report a timeout and hide the 503 that names the real
-cause, on exactly the failure the dark canary exists to catch. Worst case is
-therefore 10 + 30 + 10 = 50 seconds of probing, which is why the functions are
-given a 60-second timeout and not the more obvious 30.
+5-second probe would report a timeout and hide the 503 that names the real
+cause, on exactly the failure the dark canary exists to catch.
+
+### Transport is not the application
+
+The two verdicts are separated **structurally**, and this is the one design
+decision in the handler worth reading before changing anything:
+
+| Fails during | Verdict | Retried |
+|---|---|---|
+| `connect()` — DNS, TCP, TLS handshake | no conversation happened; nothing has been learned about the deployment | **yes** — 3 attempts, 1 s then 3 s backoff |
+| after the request is on the wire — read timeout, non-200, non-JSON | the service answered, or failed to | **never** |
+
+A read timeout is deliberately not retried: `/ready` hanging for thirty seconds
+is DynamoDB being unreachable, which is the finding the dark canary exists to
+produce, and retrying it would only make the gate slower at reaching the same
+answer. The single exception is an idle keep-alive connection reaped between
+probes, which arrives as `ConnectionResetError` and earns exactly one reconnect.
+
+This is why the module uses `http.client` rather than `urllib`. `urlopen` takes
+**one** `timeout` covering connect, handshake and read, so the two cases cannot
+be told apart without guessing at exception text — and it opens a fresh
+connection per call with `Connection: close`, so every probe paid its own
+handshake. `HTTPSConnection` lets `connect()` be called explicitly with its own
+budget and the socket re-armed before the request, and one connection now serves
+all three probes.
+
+On 2026-08-31 a single TLS handshake hung for ten seconds and reversed a
+production deployment that was fine. See
+[the record](../docs/phases/phase6/2026-08-31-dark-canary-transport-timeout.md),
+including the two explanations that felt convincing and were refuted by the
+`REPORT` durations.
+
+The retries are bounded twice: by `TRANSPORT_ATTEMPTS`, and by a deadline taken
+from `context.get_remaining_time_in_millis()` less a five-second reserve. A
+killed function is an invocation error, and D3 turns that into a rollback — the
+same outcome the retry exists to prevent, reached by a worse route.
+
+Worst case is therefore 30 s of connect attempts + 4 s of backoff + 5 + 30 + 5
+of reads = 74 s, plus the reserve, which is why the functions are given **90**
+seconds. ECS imposes no competing limit: `describe-services` reports each hook's
+`timeoutConfiguration` as `timeoutInMinutes: 1440, action: ROLLBACK`.
 
 ### Standard library only
 
@@ -158,5 +196,7 @@ change.
 
     make test-lambdas
 
-They patch `urllib.request.urlopen` throughout, so they make no network call and
-need no AWS session. Coverage is gated at 95%.
+They patch `http.client.HTTPSConnection` throughout, so they make no network
+call and need no AWS session. Retry backoff is recorded rather than waited out,
+so the suite runs in under a second. Coverage is gated at 95%; the lifecycle
+hook handler sits at 100%.

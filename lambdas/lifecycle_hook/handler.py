@@ -14,27 +14,48 @@ bad: a raised exception is an unambiguous invocation error under any contract,
 whereas a returned FAILED that ECS does not parse promotes a bad build to
 production. Do not "tidy" this into a symmetric return.
 
-Plan F2 is now half retired, by real evidence from 2026-08-31. The success key
-is confirmed correct: ECS documents {"hookStatus": "SUCCEEDED" | "FAILED" |
-"IN_PROGRESS"}, lower-case, and a callBackDelay alongside IN_PROGRESS. The raise
-path is confirmed to fail CLOSED — an exception aborted the deployment and ECS
-reported "HookStatus must not be null", which is that parse failure being
-surfaced rather than a rejection being understood. So the asymmetry works but
-produces a misleading operator-facing message, and whether to replace the raise
-with a returned FAILED is a decision for Phase 11, which deliberately rejects a
-build and can therefore observe both forms. It is not changed here: this was
-found mid-incident, and a second change to the rejection path would have been
-made with no evidence for it.
+Plan F2 is now fully retired by real evidence from 2026-08-31 and 2026-09-01.
+The success key is confirmed correct: ECS documents {"hookStatus": "SUCCEEDED" |
+"FAILED" | "IN_PROGRESS"}, lower-case, and a callBackDelay alongside
+IN_PROGRESS. The raise path is confirmed to fail CLOSED — an exception aborted
+the deployment and ECS reported "HookStatus must not be null", which is that
+parse failure being surfaced rather than a rejection being understood. So the
+asymmetry works but produces a misleading operator-facing message, and whether
+to replace the raise with a returned FAILED is a decision for Phase 11, which
+deliberately rejects a build and can therefore observe both forms.
+
+The event shape is confirmed too, and is no longer a guess:
+
+    {"executionDetails": {"testTrafficWeights": {}, "productionTrafficWeights": {},
+                          "serviceArn": "...", "targetServiceRevisionArn": "..."},
+     "executionId": "...", "lifecycleStage": "POST_TEST_TRAFFIC_SHIFT",
+     "resourceArn": ".../service-deployment/..."}
+
+It is still not parsed. targetServiceRevisionArn names the revision this hook
+was invoked to judge, and comparing it against what was actually served would
+have detected the isolation defect from inside on the first deployment — but
+resolving a revision ARN to an image needs boto3 and IAM, which costs the
+standard-library-only property that makes this one file. That trade is Phase
+11's to make, not this handler's. Note also that both weight maps arrive empty.
+
+Transport failures are retried; the service answering badly is never retried.
+That distinction is the subject of
+docs/phases/phase6/2026-08-31-dark-canary-transport-timeout.md and is why this
+module uses http.client rather than urllib: urlopen takes ONE timeout covering
+connect, handshake and read, so the two verdicts cannot be separated without
+guessing at exception text. See _connect and _request below.
 
 Standard library only. No boto3, no HTTP client dependency — which is what makes
 the deployment package one file and lets terraform test build it offline.
 """
 
+import http.client
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
+import ssl
+import time
+import urllib.parse
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
@@ -43,17 +64,44 @@ LOGGER.setLevel(logging.INFO)
 # rules out "the process never started" first; /ready is the expensive one that
 # actually reaches DynamoDB; /version is last because its answer is only
 # interesting once the first two have passed.
+#
+# All three now travel over ONE connection. urllib opened a fresh one per call
+# and sent Connection: close, so each probe paid its own DNS, TCP and TLS —
+# which meant the smallest budget in the set was also the one establishing the
+# connection.
 PROBE_PATHS = ("/health", "/ready", "/version")
 
-DEFAULT_TIMEOUT_SECONDS = 10
+# The budget for the service to ANSWER, once a connection exists. Overridable
+# by BGD_TIMEOUT_SECONDS, which Terraform does not set.
+DEFAULT_READ_TIMEOUT_SECONDS = 5
 
 # /ready gets its own floor. Phase 5's F5 measured /ready taking 25.6 seconds to
 # fail when DynamoDB is unreachable, because botocore retries with backoff. A
-# 10-second probe would report a timeout and hide the 503 that names the real
-# cause — on exactly the failure the dark canary exists to catch. The Lambda's
-# own timeout is derived from this: 10 + 30 + 10 = 50s worst case, so the
-# function is given 60. See infra/environments/prod/variables.tf.
+# 5-second probe would report a timeout and hide the 503 that names the real
+# cause — on exactly the failure the dark canary exists to catch.
 READY_MINIMUM_TIMEOUT_SECONDS = 30
+
+# The budget for DNS, TCP and the TLS handshake — separately, because this is
+# the half that is worth retrying.
+CONNECT_TIMEOUT_SECONDS = 10
+
+# Three attempts at establishing a connection, then the verdict stands. On
+# 2026-08-31 a single handshake hung for the full ten seconds and reversed a
+# production deployment that was fine; the four healthy invocations either side
+# of it completed all three requests in 0.4 to 1.0 seconds, so one retry is the
+# difference between a flaky gate and a working one, and three is generous.
+TRANSPORT_ATTEMPTS = 3
+TRANSPORT_BACKOFF_SECONDS = (1.0, 3.0)
+
+# Held back from the Lambda's own remaining time so the handler returns a
+# reasoned rejection instead of being killed. A killed function is an invocation
+# error, and plan D3 makes that a rollback — the same outcome the retry exists
+# to prevent, arrived at by a worse route.
+DEADLINE_RESERVE_SECONDS = 5
+
+# Used only when the runtime hands us no context, which is the test harness.
+# Real invocations always derive the deadline from the function's own timeout.
+FALLBACK_BUDGET_SECONDS = 85
 
 
 class HookRejected(Exception):  # noqa: N818 — see below
@@ -70,6 +118,21 @@ class HookRejected(Exception):  # noqa: N818 — see below
     """
 
 
+class _TransportError(Exception):
+    """No conversation happened: DNS, TCP, or the TLS handshake.
+
+    Internal, and it never escapes this module — once the attempts or the
+    deadline are spent it becomes a HookRejected, so the hook still fails
+    closed. It exists so that "should this be retried?" is a property of where
+    the failure occurred rather than a guess about its message.
+
+    Nothing raised after the request is on the wire belongs here. A 503, a
+    body that is not JSON, or a read that times out are all the service
+    answering — or failing to — and that is the finding this hook exists to
+    produce. Retrying those would turn the gate into a slower gate.
+    """
+
+
 def _required(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -79,42 +142,153 @@ def _required(name: str) -> str:
     return value
 
 
-def _timeout_for(path: str, base: int) -> int:
+def _read_timeout_for(path: str, base: int) -> int:
     return max(base, READY_MINIMUM_TIMEOUT_SECONDS) if path == "/ready" else base
 
 
-def _probe(base_url: str, path: str, timeout: int) -> bytes:
-    """Fetch one path, or raise HookRejected naming it.
+def _split(base_url: str) -> tuple[str, int, str]:
+    """Host, port and any path prefix, from BGD_PROBE_URL.
+
+    http.client wants these apart, where urlopen took them joined. The path
+    prefix is preserved rather than dropped so a probe URL carrying one behaves
+    as it did — the deployed URLs carry none, and a silent change in what gets
+    requested is not something to discover during a deployment.
+    """
+    parts = urllib.parse.urlsplit(base_url)
+
+    if parts.scheme != "https":
+        # The dark canary must exercise the same path a user would. A hook that
+        # validated green over plaintext would not be testing what production
+        # serves, and every listener in this project terminates TLS.
+        raise HookRejected(f"BGD_PROBE_URL must be https, not {parts.scheme!r}: {base_url}")
+
+    if not parts.hostname:
+        raise HookRejected(f"BGD_PROBE_URL has no host: {base_url}")
+
+    return parts.hostname, parts.port or 443, parts.path.rstrip("/")
+
+
+def _remaining(deadline: float) -> float:
+    return deadline - time.monotonic()
+
+
+def _connect(host: str, port: int, timeout: float) -> http.client.HTTPSConnection:
+    """DNS, TCP and TLS, with a budget of their own.
+
+    Everything this raises is retryable, and that is the whole reason the
+    connection is established explicitly instead of implicitly inside the first
+    request.
+    """
+    started = time.monotonic()
+    conn = http.client.HTTPSConnection(
+        host, port, timeout=timeout, context=ssl.create_default_context()
+    )
+
+    try:
+        conn.connect()
+    except OSError as error:
+        # URLError's replacement: socket.timeout, ssl.SSLError and
+        # ConnectionRefusedError are all OSError, as is the bare TimeoutError a
+        # handshake timeout arrives as. One clause covers them.
+        conn.close()
+        raise _TransportError(
+            f"could not reach {host}:{port} within {timeout:.0f}s: {error}"
+        ) from error
+
+    LOGGER.info("connected to %s:%s in %.0f ms", host, port, (time.monotonic() - started) * 1000)
+    return conn
+
+
+def _request(conn: http.client.HTTPSConnection, path: str, timeout: float) -> bytes:
+    """Issue one request on an established connection, or name what went wrong.
 
     Every failure message contains the path and what happened, because a hook
     rejection's only trace is this string in CloudWatch — and "green never
     became healthy" and "green was healthy but served the wrong image" have
     entirely different next steps.
     """
-    target = f"{base_url}{path}"
+    started = time.monotonic()
+    conn.sock.settimeout(timeout)
 
     try:
-        # The S310 suppression below is deliberate: the URL is this project's
-        # own ALB, built from a hostname foundation owns and a path from the
-        # constant tuple above. There is no caller-supplied scheme to audit.
-        with urllib.request.urlopen(target, timeout=timeout) as response:  # noqa: S310
-            status = response.status
-            body = response.read()
-    except urllib.error.HTTPError as error:
-        # urlopen raises rather than returns on a non-2xx, so this is the branch
-        # a real 503 from /ready arrives through.
-        raise HookRejected(f"{path} returned {error.code}, expected 200") from error
-    except OSError as error:
-        # URLError is an OSError subclass, as is the bare TimeoutError that a
-        # socket read timeout can raise past it. One clause covers both.
-        raise HookRejected(f"{path} was unreachable after {timeout}s: {error}") from error
+        conn.request("GET", path)
+        response = conn.getresponse()
+        status = response.status
+        body = response.read()
+    except (ConnectionResetError, http.client.BadStatusLine) as error:
+        # The one transport failure that can surface here: an idle keep-alive
+        # connection reaped between probes. RemoteDisconnected subclasses
+        # ConnectionResetError, so this covers it. Worth exactly one reconnect.
+        raise _TransportError(f"{path}: connection closed before a reply: {error}") from error
+    except (OSError, http.client.HTTPException) as error:
+        # The request is on the wire and the service did not answer inside its
+        # budget. That is a finding, not a network hiccup — /ready hanging for
+        # thirty seconds is DynamoDB being unreachable, which is precisely what
+        # the dark canary is for. Never retried.
+        raise HookRejected(f"{path} did not answer within {timeout:.0f}s: {error}") from error
+
+    LOGGER.info("%s answered %s in %.0f ms", path, status, (time.monotonic() - started) * 1000)
 
     if status != 200:
-        # Defensive: a custom opener or proxy can hand back a non-2xx without
-        # raising. Asserted by a test so the branch is not dead code.
         raise HookRejected(f"{path} returned {status}, expected 200")
 
     return body
+
+
+def _probe_all(base_url: str, read_base: int, deadline: float) -> dict[str, bytes]:
+    """One connection, three requests, and a bounded retry on the connection.
+
+    The loop retries the whole set rather than the failed request alone. Every
+    probe is a GET, so re-running /health and /ready costs a few hundred
+    milliseconds and keeps the "one connection" property that made the retry
+    affordable in the first place.
+    """
+    host, port, prefix = _split(base_url)
+    timeouts = {path: _read_timeout_for(path, read_base) for path in PROBE_PATHS}
+
+    # The worst case of a complete attempt. Refusing to start one that cannot
+    # finish is what keeps the retries inside the function's own timeout.
+    attempt_cost = CONNECT_TIMEOUT_SECONDS + sum(timeouts.values())
+
+    last: _TransportError | None = None
+
+    for attempt in range(1, TRANSPORT_ATTEMPTS + 1):
+        if last is not None:
+            if _remaining(deadline) < attempt_cost:
+                raise HookRejected(
+                    f"no connection to {host}:{port} after {attempt - 1} attempt(s), "
+                    f"and {_remaining(deadline):.0f}s left is too little to try again: {last}"
+                ) from last
+
+            backoff = TRANSPORT_BACKOFF_SECONDS[
+                min(attempt - 2, len(TRANSPORT_BACKOFF_SECONDS) - 1)
+            ]
+            LOGGER.warning(
+                "transport failure on attempt %d/%d (%s) — retrying in %.0fs",
+                attempt - 1,
+                TRANSPORT_ATTEMPTS,
+                last,
+                backoff,
+            )
+            time.sleep(backoff)
+
+        try:
+            conn = _connect(host, port, min(CONNECT_TIMEOUT_SECONDS, _remaining(deadline)))
+        except _TransportError as failure:
+            last = failure
+            continue
+
+        try:
+            return {path: _request(conn, f"{prefix}{path}", timeouts[path]) for path in PROBE_PATHS}
+        except _TransportError as failure:
+            last = failure
+            continue
+        finally:
+            conn.close()
+
+    raise HookRejected(
+        f"no connection to {host}:{port} after {TRANSPORT_ATTEMPTS} attempts: {last}"
+    )
 
 
 def _decode_version(body: bytes) -> dict[str, object]:
@@ -126,30 +300,50 @@ def _decode_version(body: bytes) -> dict[str, object]:
         raise HookRejected(f"/version did not return JSON: {error}") from error
 
 
+def _deadline_from(context: object) -> float:
+    """When the handler must have returned a verdict by.
+
+    Derived from the Lambda's own remaining time rather than a constant, so the
+    retry budget cannot outlive the function no matter what
+    hook_timeout_seconds is set to. A killed function is an invocation error,
+    and plan D3 turns that into a rollback of a build that may have been fine —
+    which is the failure this whole retry path exists to stop.
+    """
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+
+    if callable(remaining):
+        try:
+            budget = remaining() / 1000.0 - DEADLINE_RESERVE_SECONDS
+        except TypeError, ValueError:
+            budget = FALLBACK_BUDGET_SECONDS
+    else:
+        budget = FALLBACK_BUDGET_SECONDS
+
+    return time.monotonic() + max(budget, 1.0)
+
+
 def handler(event: object, context: object) -> dict[str, str]:
     """Probe one listener and report whether the deployment may proceed.
 
-    `event` and `context` are accepted and deliberately not parsed. Reading the
-    deployment identifiers out of the event would be more informative, but the
-    event's shape is unverifiable offline (plan F2) and a handler that raised on
-    an unexpected shape would fail every deployment. The event is logged raw
-    instead, which is how the runbook discovers what it really contains.
+    `event` is accepted and deliberately not parsed — see the module docstring
+    for its now-confirmed shape and why reading it is Phase 11's decision. It is
+    logged raw. `context` is read for one thing only: how long is left.
     """
     probe_url = _required("BGD_PROBE_URL").rstrip("/")
     stage = _required("BGD_STAGE")
-    timeout = int(os.environ.get("BGD_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+    read_base = int(os.environ.get("BGD_TIMEOUT_SECONDS", DEFAULT_READ_TIMEOUT_SECONDS))
+    deadline = _deadline_from(context)
 
     LOGGER.info(
-        "hook invoked stage=%s probe_url=%s event=%s",
+        "hook invoked stage=%s probe_url=%s budget=%.0fs event=%s",
         stage,
         probe_url,
+        _remaining(deadline),
         json.dumps(event, default=str),
     )
 
     try:
-        bodies = {
-            path: _probe(probe_url, path, _timeout_for(path, timeout)) for path in PROBE_PATHS
-        }
+        bodies = _probe_all(probe_url, read_base, deadline)
     except HookRejected as rejection:
         # BGD_ALLOW_UNSERVED exists for exactly one situation: a stage that runs
         # BEFORE this environment serves anything, on a deployment that is
@@ -169,6 +363,10 @@ def handler(event: object, context: object) -> dict[str, str]:
         # prod deployment; see
         # docs/phases/phase6/2026-08-31-pre-scale-hook-cold-start.md.
         #
+        # It cannot be narrowed to "is this a create?" from the event: the
+        # payload carries targetServiceRevisionArn but no source revision, so a
+        # create and a redeploy are indistinguishable to this handler.
+        #
         # Deliberately NOT set on the other two stages, and the asymmetry is the
         # whole design. POST_TEST_TRAFFIC_SHIFT is the dark canary: it probes
         # green on :8443 after green exists, so an unreachable endpoint there
@@ -180,7 +378,15 @@ def handler(event: object, context: object) -> dict[str, str]:
         if os.environ.get("BGD_ALLOW_UNSERVED", "").strip().lower() != "true":
             raise
 
-        LOGGER.info(
+        # WARNING, not INFO, and the level is the point. This records a probe
+        # that FAILED and was allowed through anyway. At INFO it read as routine
+        # output, and on 2026-08-31 it concealed three real production 503s —
+        # the production listener rule had been reverted to an empty target
+        # group seconds earlier, on three ordinary deployments, and the hook's
+        # "4 invocations, 0 rejected" was taken as evidence that :443 was
+        # healthy. See fixIssues.md. After the alb.tf fix this must not appear
+        # on anything but a create or a rebuild.
+        LOGGER.warning(
             "stage=%s proceeding: %s is not serving yet (%s). "
             "BGD_ALLOW_UNSERVED is set, so this is a create or a rebuild rather "
             "than a rejection.",

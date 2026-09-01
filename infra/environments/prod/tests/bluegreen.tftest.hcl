@@ -365,14 +365,22 @@ run "the_hook_timeout_survives_a_slow_ready_probe" {
 
   # Phase 5's F5 measured /ready taking 25.6s to fail when DynamoDB is
   # unreachable, because botocore retries with backoff. The handler floors
-  # /ready at 30s, so three sequential probes are worst-case 10 + 30 + 10 = 50s.
-  # A 30-second function would be killed mid-/ready, ECS would see an invocation
+  # /ready at 30s.
+  #
+  # The budget is no longer three sequential probes. The handler opens one
+  # connection and retries it — and only it — on a transport failure, so the
+  # worst case is 30s of connect attempts + 4s of backoff + 5 + 30 + 5 of reads
+  # = 74s, and it reserves 5s to return a verdict rather than be killed. A
+  # function shorter than that is killed mid-probe, ECS sees an invocation
   # error, and plan D3 makes that a rejection — so the dark canary would fail
-  # every deployment where DynamoDB was merely slow, which is the opposite of a
-  # useful gate.
+  # every deployment where DynamoDB was merely slow, or where one handshake was,
+  # which is the opposite of a useful gate.
+  #
+  # The old 60/50s form was sized before the retry existed, and one deployment
+  # in four was reversed by a ten-second handshake because of it.
   assert {
-    condition     = var.hook_timeout_seconds >= 60
-    error_message = "a hook shorter than 60s is killed mid-/ready and rejects builds that were fine"
+    condition     = var.hook_timeout_seconds >= 90
+    error_message = "a hook shorter than 90s is killed mid-probe and rejects builds that were fine"
   }
 }
 

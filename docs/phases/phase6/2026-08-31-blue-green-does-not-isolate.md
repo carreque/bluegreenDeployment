@@ -1,10 +1,16 @@
 # Phase 6 — blue/green does not isolate the colours
 
 **Date:** 2026-08-31
-**Status:** **Open.** Reproduced four times, cause not established.
+**Status:** **Closed 2026-09-01 — cause found, fix applied, verified end to
+end against a real account.**
+See [§7](#7-resolution-2026-09-01). Sections 1–6 are the contemporaneous
+account and are left as written; §5's three candidate directions were all
+wrong, and §5 says so where it stands.
 **Severity:** This defeats the property the project exists to demonstrate.
 **Evidence:** CloudTrail target registrations, ECS service events, a 10-second
-sampling log of both listeners, three lifecycle hook log groups.
+sampling log of both listeners, three lifecycle hook log groups. On 2026-09-01,
+CloudTrail `ModifyRule` and `UpdateService`, a `terraform plan` against live
+prod, and one controlled deployment.
 
 Production deploys, serves, bakes and rolls back. It does **not** separate the
 two colours. Both revisions are registered in one target group for the whole
@@ -109,6 +115,12 @@ places the replacement revision in the current group regardless.
 
 ## 5. What is not yet known
 
+> **Superseded by [§7](#7-resolution-2026-09-01).** All three directions below
+> were wrong, and the proposed experiment would have confirmed itself for the
+> wrong reason — inverting the assignment moves the defect to the other colour
+> without curing it. The cause was not in ECS at all. Kept as written, because
+> what an investigation ruled *in* is part of its record.
+
 Why. Candidate directions, none tested:
 
 - Whether the two target groups differ in some attribute ECS requires them to
@@ -150,3 +162,197 @@ rather than presenting the decision as free.
 Until this is resolved, the honest description of the production environment is:
 **a rolling deployment with a bake period, alarm-triggered rollback and three
 Lambda hooks — none of which observes the new revision in isolation.**
+
+---
+
+## 7. Resolution (2026-09-01)
+
+**Terraform was reverting the colour assignment at the start of every
+deployment.** The defect was in this repository, not in ECS or in the AWS
+provider.
+
+### How ECS actually chooses
+
+ECS decides which target group is live by **reading the production listener
+rule**. It does not read `alternateTargetGroupArn`, and it never swaps that
+field — the pair `targetGroupArn` / `alternateTargetGroupArn` declares *which
+two groups*, not *which role each holds*. The role lives on the rule.
+
+That is why §4 ruled the Terraform configuration "correct" and was right to:
+every field named there was set correctly. The defect was not in what was
+declared but in the fact that it was **re-declared**, on every apply, over the
+top of ECS's own decision.
+
+### The loop
+
+`aws_lb_listener_rule.production` and `.test` in `alb.tf` carried no
+`lifecycle { ignore_changes = [action] }`. ECS rewrites both during the shift;
+Terraform read that as drift; every apply reverted it seconds before the
+deployment that apply had just started:
+
+```
+apply      → production rule ← blue (which holds nothing)
+ECS        → reads the production rule: "blue is live"
+             → deploys the incoming revision into the other one … green,
+               where the outgoing revision already is
+ECS        → shifts both rules to green=100, blue=0
+next apply → reverts them, and the fixed point holds
+```
+
+The drift is **structural**, not a colour mismatch — the config declares a
+single `target_group_arn` where ECS leaves a two-entry weighted forward — so the
+revert fires on every apply from any starting state. That makes green an
+attractor: from blue, ECS deploys into green and stays; from green, ECS deploys
+into green and stays. The create enters it immediately, because the rules are
+born pointing at an empty blue. That is all seven registrations in §2, and it is
+why no deployment ever worked.
+
+### The evidence
+
+1. **CloudTrail `ModifyRule`.** Two calls from `app-deploy-prod-role` or
+   `infra-apply-role` — one per rule — 5 to 21 seconds before the
+   `prod-bluegreen-role` calls, on every cycle. `infra-apply-role` appears too:
+   an `infra/**` merge reverted the colours with no application change involved.
+2. **`terraform plan` against live prod.** `Plan: 0 to add, 2 to change, 0 to
+   destroy` — exactly the two listener rules, and **no change to
+   `aws_ecs_service.api`**.
+3. **CloudTrail `UpdateService`.** No call from any caller carries a
+   `loadBalancers` parameter, so the service's record is ECS's own and has never
+   been written by Terraform. Both service revisions inspected carry an
+   identical, unswapped `targetGroupArn = blue / alternate = green`.
+4. **A controlled deployment.** With the rules left in ECS's own state
+   (`green=100`, green holding both tasks, blue empty) and no `terraform apply`
+   in front of it, `--force-new-deployment` produced:
+
+   ```
+   06:20:34Z  registered 2 targets in (target-group …/prod-api-blue/…)
+   06:21:11Z  production rule → …-api-green   (outgoing, 2 tasks)
+   06:21:11Z  test rule       → …-api-blue    (incoming, 2 tasks)
+   06:21:13Z  hook invoked stage=POST_TEST_TRAFFIC_SHIFT probe_url=…:8443
+   ```
+
+   Blue held targets for the first time in the platform's life, the two colours
+   separated, and the dark canary probed the incoming revision — with **no
+   change to this repository**, only the absence of an apply.
+
+### What else it was causing
+
+`PRE_SCALE_UP` recorded "4 invocations, 0 rejected", which was never evidence
+that `:443` was healthy. Three of those four were ordinary deployments where the
+production rule had just been reverted to an empty blue, `:443` genuinely
+returned 503, and `BGD_ALLOW_UNSERVED` logged it at `INFO` and proceeded. So
+every deployment carried a real production outage window that nothing reported —
+and the eight `HTTPCode_ELB_5XX_Count` in §3 were probably not only our own
+probes. The control is in the same log group: the 2026-09-01 deployment, with no
+apply in front of it, logged nothing. See
+[the pre-scale record](./2026-08-31-pre-scale-hook-cold-start.md).
+
+### The fix
+
+`lifecycle { ignore_changes = [action] }` on both rules in
+`infra/environments/prod/alb.tf`. Two blocks. Only the forward target is
+ignored — `condition` stays managed, so path patterns remain Terraform's.
+
+Deliberately **not** done: the same on `aws_ecs_service.api`'s `load_balancer`.
+Terraform never writes that field, the plan confirms no change on it, and it is
+a **set** in the provider schema — so `ignore_changes` could only take the whole
+block, losing management of both rule ARNs and the `bluegreen` role ARN. Real
+cost, no benefit.
+
+`terraform test` cannot assert `lifecycle` meta-arguments, so nothing in the
+layer's suite can pin this. A textual guard in `scripts/lint-infra.sh` fails if
+either rule loses its block. It is a weak guard and is described as one where it
+sits.
+
+### What §6 now says
+
+- **Exit criterion 2 is achievable.** The mechanism is demonstrated. What is not
+  yet demonstrated is the criterion as written — *different SHAs on `:443` and
+  `:8443`* — because `--force-new-deployment` redeploys the same image, so both
+  listeners necessarily reported the same digest. That needs two deployments of
+  genuinely different builds through the pipeline.
+- **Phase 11's first demonstration is unblocked**, subject to the same
+  verification.
+- **Design §1.5's argument for ECS-native is now more than untouched.** The
+  feature behaved correctly throughout. The ADR Phase 11 owes should record this
+  as a cost of the *ownership model* — Terraform and a deployment controller both
+  holding an opinion about the same mutable field — rather than a cost of the
+  choice between ECS-native and CodeDeploy. CodeDeploy would have had the same
+  problem in the same place.
+
+### Verified end to end (2026-09-01, 14:18–14:55Z)
+
+`make rebuild SCOPE=prod` from a destroyed account, then two deployments of
+genuinely different builds. **All five observations hold, and the colours
+alternate.**
+
+**The free check first.** After the create, `terraform plan` against a live
+production whose rules ECS had already moved:
+
+```
+config declares:  production → blue,  test → green
+live:             production → green, test → green
+
+No changes. Your infrastructure matches the configuration.
+```
+
+That exact divergence produced `Plan: 0 to add, 2 to change, 0 to destroy` before
+the fix. Zero now, and it cost nothing to establish.
+
+**The alternation.** Three deployments, three different builds:
+
+| Deployment | Incoming build | Registered in |
+|---|---|---|
+| create | `0.1.6-6f24d09` | **green** — expected; the rules are born pointing at an empty blue |
+| deploy-1 | `0.1.5-25153bc` | **blue** |
+| deploy-2 | `0.1.3-caa0d21` | **green** |
+
+One alternation could be luck. Two in opposite directions cannot.
+
+**Exit criterion 2, twice** — from
+[`docs/evidence/phase-06-exit-criterion-2.txt`](../../evidence/phase-06-exit-criterion-2.txt):
+
+```
+TIME       blueTG greenTG :443           :8443          prodRule→  testRule→
+14:38:34   2      2       0.1.6-6f24d09  0.1.5-25153bc  green      blue
+14:38:48   2      2       0.1.6-6f24d09  0.1.5-25153bc  green      blue
+14:39:02   2      2       0.1.5-25153bc  0.1.5-25153bc  blue       blue    ← production shift
+...
+14:48:48   2      2       0.1.5-25153bc  0.1.3-caa0d21  blue       green
+14:49:02   2      2       0.1.5-25153bc  0.1.3-caa0d21  green      green   ← production shift
+```
+
+Two target groups, one revision each, the production listener on the outgoing
+build and the test listener on the incoming one. `:443` never served the incoming
+revision before the production shift, which is the half that proves the canary
+was genuinely dark.
+
+**The dark canary saw the right revision, both times:**
+
+```
+14:38:49  stage=POST_TEST_TRAFFIC_SHIFT probed=…:8443 git_sha=25153bc
+14:49:00  stage=POST_TEST_TRAFFIC_SHIFT probed=…:8443 git_sha=caa0d21
+```
+
+Against three consecutive deployments before the fix, where it reported the
+**outgoing** revision every time.
+
+**And the signature of the defect is gone.** Nine `ModifyRule` calls across the
+create and both deployments, **all from `bgd-us-east-1-prod-bluegreen-role`**.
+None from `app-deploy-prod-role` or `infra-apply-role`.
+
+**Rollback capability intact.** The outgoing revision was deregistered seven
+minutes after the incoming one registered, on both deployments — after the bake,
+not during the shift.
+
+The honest description of production is now: **blue/green, isolating the
+colours, verified end to end.**
+
+### What remains
+
+**One thing, and it is narrow.** Both deployments were driven by
+`scripts/tf.sh apply prod -var image_tag=…`, which is the same call
+`scripts/pipeline-deploy.sh` makes — but the *pipeline* path has not been re-run
+since the fix. Phase 8's stages are unchanged by it and the applied plan is
+identical, so this is a re-confirmation rather than an open question. Worth doing
+on the next pipeline run rather than spending a deployment on it now.

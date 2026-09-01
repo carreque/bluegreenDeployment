@@ -120,8 +120,14 @@ make tf-check
 make test-lambdas
 ```
 
-Expected: five layers validate, tflint and checkov clean, 87 Terraform test
-runs pass, 17 handler tests at 100% coverage.
+Expected: five layers validate, tflint and checkov clean, **152** Terraform test
+runs pass (bootstrap 5, foundation 77, network 17, staging 17, prod 36), and
+**68** handler tests with `lifecycle_hook/handler.py` at 100% coverage.
+
+Counts measured 2026-09-01, not remembered. `make tf-test` needs a valid session
+for every layer except `bootstrap` — the other four read remote state, and an
+expired token fails them with `ExpiredToken` rather than anything about the
+tests.
 
 ---
 
@@ -197,7 +203,7 @@ diverge, and the divergence is the evidence.
 
 ---
 
-## 9. Read the hook logs and record the real contract — **this retires F2**
+## 9. Read the hook logs and record the real contract — **F2 is now retired**
 
 The single largest unverified assumption in the phase. The payload ECS expects
 back from a lifecycle hook is not in the provider schema and could not be
@@ -339,15 +345,61 @@ aws ecs stop-service-deployment --service-deployment-arn "$DEPLOYMENT"
 
 ## 13. Exit criterion 2 — different SHAs on `:443` and `:8443`
 
-> **This step cannot pass as the layer is currently configured, and that is a
-> defect rather than a mistake in the step.** *(Added 2026-08-31.)* Every
-> revision registers into the same target group — `blue` has never held a
-> target across four deployments and a full teardown and rebuild — so both
-> listeners resolve to one mixed pool and the two ports return whichever task
-> the load balancer happens to pick. Do not spend time trying to catch the
-> window; there is no window. Read [blue/green does not
-> isolate](../phases/phase6/2026-08-31-blue-green-does-not-isolate.md) first,
-> and treat its §5 experiment as the prerequisite for this step.
+> **Fixed and verified 2026-09-01.** *(Superseding the 2026-08-31 note that said
+> this step could not pass.)* The captured run is
+> [`docs/evidence/phase-06-exit-criterion-2.txt`](../evidence/phase-06-exit-criterion-2.txt)
+> — a rebuild from a destroyed account plus two deployments of different builds,
+> with the criterion appearing twice and the colours alternating
+> (create → green, deploy-1 → blue, deploy-2 → green).
+>
+> **The check to run before spending a deployment**, which is free: after the
+> create, `terraform plan` against the live layer. ECS will have moved the
+> production rule off the colour the config names, and the plan must still say
+> `No changes`. Before the fix that divergence produced `Plan: 0 to add, 2 to
+> change` — the two rule reverts that were the whole defect. If you see them,
+> stop; `ignore_changes` has been lost from `alb.tf`.
+>
+> **Expect the create to land in green and do not read that as a failure.** The
+> rules are born `production → blue` with blue empty, so ECS deploys the first
+> revision into the other group. Alternation starts at the second deployment.
+>
+> Between the layer's creation and 2026-09-01 every revision registered into the
+> same target group — `blue` never held a target across seven registrations —
+> so both listeners resolved to one mixed pool and there was no window to catch.
+> The cause was that Terraform reverted the two `aws_lb_listener_rule` actions at
+> the start of every apply, telling ECS that blue was live when green was; ECS
+> reads that rule to decide where to deploy. Both rules now carry
+> `ignore_changes = [action]`.
+>
+> The mechanism was demonstrated by hand: with the rules left in ECS's own state
+> and no apply in front of it, the incoming revision registered into blue, the
+> production rule stayed on green and the test rule moved to blue. What that
+> could **not** show is this step's criterion, because
+> `--force-new-deployment` redeploys the same image and both ports necessarily
+> reported the same digest. **This step is the outstanding verification** — read
+> [blue/green does not
+> isolate](../phases/phase6/2026-08-31-blue-green-does-not-isolate.md) §7 before
+> running it, and record the result there.
+>
+> Two practical notes before you start, both of which cost time on 2026-08-31:
+>
+> - **Pin the hostname.** A rebuild creates a new ALB and the local resolver can
+>   keep serving the destroyed one, which reads exactly like an unstable
+>   rollout:
+>
+>   ```bash
+>   ALBDNS=$(aws elbv2 describe-load-balancers --names bgd-us-east-1-prod-alb \
+>     --query 'LoadBalancers[0].DNSName' --output text)
+>   IP=$(dig +short "$ALBDNS" | grep -E '^[0-9.]+$' | head -1)
+>   curl -sk --resolve "api.carloscloudengineer.com:8443:$IP" \
+>     https://api.carloscloudengineer.com:8443/version
+>   ```
+>
+> - **Compare the full tag, not `git_sha`.** A "Release change" rebuilds the same
+>   commit, so both colours report the same SHA. The patch digit is the CodeBuild
+>   build number: `0.1.5-25153bc` against `0.1.6-25153bc`. The loop below prints
+>   `git_sha`; add `.version` to it, or step 11's second image must come from a
+>   different commit.
 
 **This is the direct proof of which colour serves whom, and the window is a few
 minutes wide.** Have this loop running in a third terminal *before* you start
@@ -406,13 +458,42 @@ aws lambda wait function-updated-v2 --function-name "$POST_TEST"
 > wrong reason — a missing `BGD_PROBE_URL` — which would still abort the
 > deployment but would prove nothing about the digest check.
 
-Now deploy again. Rebuild a third image, or roll `image_tag` back to the
-previous one — either produces a real deployment for the hook to reject.
+> **Do NOT trigger this deployment with Terraform.** *(Corrected 2026-09-01,
+> after the original instruction was tried and could not work.)*
+>
+> The `lambda` module manages the **whole** `environment` map, so a variable set
+> by hand is drift, and the plan says so:
+>
+> ```
+> # module.post_test_hook.aws_lambda_function.this will be updated in-place
+>   - "BGD_EXPECT_DIGEST" = "sha256:0000…" -> null
+> ```
+>
+> `aws_ecs_service.api` references `module.post_test_hook.function_arn`, so
+> Terraform updates the **Lambda first and the service second** — stripping the
+> expectation before the hook it is meant to fail ever runs. `make apply-prod`
+> here produces a deployment that simply succeeds, and proves nothing.
+>
+> Plan §D12 is still true: Terraform never *sets* this variable, which is what
+> keeps it out of the committed infrastructure. What does not follow — and what
+> this runbook previously claimed — is that Terraform cannot *see* it.
+
+Trigger the deployment without Terraform instead. The task definition does not
+change, so this registers no drift and none of the reasoning about
+`update-service --task-definition` applies:
 
 ```bash
-$EDITOR infra/environments/prod/terraform.tfvars
-make apply-prod        # EXPECTED TO FAIL. That is the criterion.
+aws ecs update-service \
+  --cluster bgd-us-east-1-prod-cluster \
+  --service bgd-us-east-1-prod-api \
+  --force-new-deployment
 ```
+
+**The trade, stated:** the incoming and outgoing revisions are the same image, so
+"`:443` kept serving the old digest" is trivially true and is *not* the evidence.
+The load-bearing evidence is that the **production listener rule never leaves the
+outgoing colour** and the deployment ends `ROLLBACK_SUCCESSFUL` at
+`POST_TEST_TRAFFIC_SHIFT`. Check 3 below is written accordingly.
 
 **What to confirm, and confirm all three:**
 
@@ -424,13 +505,48 @@ aws ecs describe-service-deployments --service-deployment-arns "$DEPLOYMENT" \
 # 2. The hook rejected it for the RIGHT reason — the message names both digests.
 aws logs tail "/aws/lambda/$POST_TEST" --since 15m --format short | grep -i 'HookRejected\|BGD_EXPECT_DIGEST'
 
-# 3. ZERO production traffic shifted: :443 never stopped serving the old digest.
-curl -sS "$API/version" | jq -r '.image_digest'
+# 3. ZERO production traffic shifted: the production rule never left its colour.
+aws elbv2 describe-rules --rule-arns "$PROD_RULE" \
+  --query 'Rules[0].Actions[0].ForwardConfig.TargetGroups[?Weight>`0`].TargetGroupArn' --output text
 ```
 
-The third is the criterion. Production served the previous build continuously,
-through a deployment that was rejected before the production traffic shift ever
-began.
+The third is the criterion, and it must be sampled *through* the deployment
+rather than read afterwards — a rule that moved and moved back would look
+identical at the end. Sample every ten seconds from before the trigger.
+
+**Captured 2026-09-01** —
+[`docs/evidence/phase-06-exit-criterion-3.txt`](../evidence/phase-06-exit-criterion-3.txt):
+
+```
+TIME       blueTG greenTG :443           :8443          prodRule→  testRule→
+15:16:39   0      2       0.1.3-caa0d21  0.1.3-caa0d21  green      green
+15:17:49   2      2       0.1.3-caa0d21  0.1.3-caa0d21  green      blue    ← incoming isolated on :8443
+15:18:45   2      2       0.1.3-caa0d21  0.1.3-caa0d21  green      green   ← rejected, test rule withdrawn
+```
+
+`prodRule` reads `green` in **every** sample. The incoming revision was built,
+registered in blue and exposed on the test listener alone; the hook rejected it;
+it never received a single production request.
+
+The hook's message names both digests, which is what makes the check real rather
+than a toggle:
+
+```
+HookRejected: /version reports image_digest sha256:b477abea…,
+              but BGD_EXPECT_DIGEST is sha256:0000000000…
+```
+
+And ECS's operator-facing reason is still the parse error, not the rejection:
+
+```
+Service deployment rolled back because POST_TEST_TRAFFIC_SHIFT lifecycle hook(s)
+failed. ECS was unable to parse the response … due to: HookStatus must not be null
+```
+
+That is the known cost of the raise-rather-than-return asymmetry (plan §D3), now
+observed against a *deliberate* rejection rather than an accidental one. Whether
+to trade it for a returned `{"hookStatus": "FAILED"}` is Phase 11's decision, and
+this is the evidence it was waiting for.
 
 ### Then unset it — **do not skip this**
 
@@ -491,7 +607,10 @@ longer exists.
 | Apply fails naming `production_listener_rule` | A **listener** ARN was passed where a **rule** ARN belongs (Phase 0 A7). The message names the attribute, not the reason. |
 | `terraform validate` fails on `bake_time_in_minutes` | It is typed **string**. `tostring(var.bake_time_minutes)`, not the number. |
 | Deployment stuck in `TEST_TRAFFIC_SHIFT` for many minutes | Green never became healthy. Check the task's stopped reason and the blue/green role's permissions — a rule rewrite that half-succeeded leaves neither colour cleanly owning the listener. `aws ecs stop-service-deployment` to abort. |
-| A hook times out at 60s | Almost always `/ready` against unreachable DynamoDB — Phase 5 measured 25.6s to fail, and the handler floors `/ready` at 30s for exactly that. Check the task role and the gateway endpoint's route table association. Do **not** shorten the timeout. |
+| A hook times out at 90s | Almost always `/ready` against unreachable DynamoDB — Phase 5 measured 25.6s to fail, and the handler floors `/ready` at 30s for exactly that. Check the task role and the gateway endpoint's route table association. Do **not** shorten the timeout. |
+| A hook rejects with `no connection to …:8443 after 3 attempts` | The transport genuinely never opened, three times over ~24s. That is not the flakiness the retry was added for — check the ALB security group's `:8443` ingress and that the listener exists. A *single* slow handshake no longer rejects anything. |
+| `POST_TEST_TRAFFIC_SHIFT` reports the **outgoing** revision's tag | The colours are not separated. Check that both `aws_lb_listener_rule` resources in `alb.tf` still carry `ignore_changes = [action]`, then `aws cloudtrail lookup-events` for `ModifyRule` calls made by `app-deploy-prod-role` or `infra-apply-role`. There should be none. See [the record](../phases/phase6/2026-08-31-blue-green-does-not-isolate.md) §7. |
+| `PRE_SCALE_UP` logs a WARNING saying `:443` *is not serving yet* on a deployment that is **not** a create | Something has pointed the production listener at an empty target group. Until 2026-09-01 that was Terraform reverting the rule on every apply, and the line was at INFO where nobody saw it. |
 | Every deployment rejected at `POST_TEST_TRAFFIC_SHIFT`, logs mention a digest | `BGD_EXPECT_DIGEST` was left set at step 14. Unset it. This looks exactly like a broken build. |
 | An alarm sits in `INSUFFICIENT_DATA` forever | Expected for the *idle* colour's `UnHealthyHostCount` — that is why `treat_missing_data = "notBreaching"` is set (plan §F3). Not expected for the two LoadBalancer-scoped alarms once traffic exists. |
 | A deployment rolls back during `BAKE_TIME` with no obvious error | An alarm fired. `describe-alarms --state-value ALARM` names which. If it is the p95 and the build is fine, the threshold is too tight — it was chosen, not measured (step 10). |

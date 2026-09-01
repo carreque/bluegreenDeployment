@@ -195,6 +195,52 @@ fi
 
 failures=0
 
+# --- the blue/green colour assignment must stay ECS's ------------------------
+#
+# A grep, and it is written down as a weak guard rather than dressed up as a
+# strong one. `terraform test` cannot assert lifecycle meta-arguments — they do
+# not appear in the plan or state representation the test framework reads — so
+# there is no way to pin this in the layer's own suite, and this is the only
+# mechanical check available.
+#
+# What it protects: ECS decides which target group is live by READING the
+# production listener rule, and rewrites both rules on every deployment. Without
+# ignore_changes Terraform sees that as drift and reverts it at the start of the
+# next apply, telling ECS that blue is live when green is. ECS then deploys the
+# incoming revision into the group the outgoing revision already occupies, the
+# two colours are never separated, and the production listener spends the shift
+# pointing at an empty target group. That was the state of production from its
+# creation until 2026-09-01, through seven registrations, and every deployment
+# reported SUCCESSFUL while it happened.
+#
+# The blocks removed here would take a deployment to notice and a night to
+# diagnose. See fixIssues.md and
+# docs/phases/phase6/2026-08-31-blue-green-does-not-isolate.md.
+info "listener rules — the colour assignment is left to ECS"
+rules_file="$INFRA/environments/prod/alb.tf"
+unpinned=()
+
+for rule in production test; do
+  # terraform fmt guarantees the closing brace of a top-level block sits at
+  # column 0, which is what bounds the block without parsing HCL.
+  awk -v want="resource \"aws_lb_listener_rule\" \"$rule\" {" '
+    $0 == want { inside = 1; next }
+    inside && $0 == "}" { inside = 0 }
+    inside && /ignore_changes/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$rules_file" || unpinned+=("$rule")
+done
+
+if ((${#unpinned[@]} > 0)); then
+  warn "aws_lb_listener_rule.${unpinned[*]} in infra/environments/prod/alb.tf has no lifecycle ignore_changes"
+  warn "  ECS rewrites these rules during every traffic shift. Without ignore_changes the"
+  warn "  next apply reverts them and the two colours stop being separated — silently."
+  warn "  See fixIssues.md before removing this."
+  failures=$((failures + 1))
+else
+  ok "both listener rules leave their action to ECS"
+fi
+
 for layer in "${LAYERS[@]}"; do
   path="$(layer_path "$layer")"
   info "tflint — $layer"

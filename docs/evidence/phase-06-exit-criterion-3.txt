@@ -1,0 +1,40 @@
+# Phase 6 — exit criterion 3, captured 2026-09-01
+#
+#   "a deliberately failing hook aborts the deployment with zero production
+#    traffic shifted"
+#
+# BGD_EXPECT_DIGEST was set by hand on the post-test hook to
+# sha256:0000...0000. The check that then fails is REAL — only the expectation
+# is wrong. Terraform never sets this variable, so the committed infrastructure
+# carries no failure toggle (plan D12).
+#
+# Triggered with `aws ecs update-service --force-new-deployment`, NOT with
+# terraform apply: the lambda module manages the whole environment map, and the
+# ECS service depends on the hook's ARN, so a terraform-driven deployment strips
+# the expectation before the hook runs. See runbook step 14.
+#
+# Because the trigger reuses the same image, ":443 kept serving the old digest"
+# is trivially true and is not the evidence. THE EVIDENCE IS prodRule: it reads
+# green in every sample. The incoming revision was built, registered in blue and
+# exposed on the test listener alone, and was rejected there.
+#
+# Outcome:  ROLLBACK_SUCCESSFUL at POST_TEST_TRAFFIC_SHIFT
+# Hook:     HookRejected: /version reports image_digest sha256:b477abea...,
+#           but BGD_EXPECT_DIGEST is sha256:0000000000...
+# ECS:      "unable to parse the response ... HookStatus must not be null"
+#           — the known cost of the raise-rather-than-return asymmetry (D3),
+#           now observed against a deliberate rejection. Phase 11 decides.
+#
+# criterion-3: hook rejects — production must NEVER leave green — ALB bgd-us-east-1-prod-alb-121567266.us-east-1.elb.amazonaws.com (44.217.209.30)
+TIME       blueTG greenTG :443           :8443          prodRule→              testRule→             
+15:16:39   0      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   
+15:16:53   0      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   
+15:17:08   0      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   
+15:17:21   0      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   
+15:17:35   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   
+15:17:49   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    blue                    
+15:18:03   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    blue                    
+15:18:17   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    blue                    
+15:18:31   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    blue                    
+15:18:45   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   
+15:18:59   2      2      0.1.3-caa0d21  0.1.3-caa0d21  green                    green                   

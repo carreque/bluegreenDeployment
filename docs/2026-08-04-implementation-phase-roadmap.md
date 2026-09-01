@@ -491,6 +491,9 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 >   aborted, and no traffic moved. What it did not demonstrate is the intended
 >   version of it, on a deployment that could otherwise have succeeded.
 
+> **Resolved 2026-09-01 — see the resolution amendment below this block.** The
+> account that follows is contemporaneous and is left as written.
+>
 > **Amended in execution (2026-08-31) — blue/green does not isolate the colours,
 > and this is the most serious finding in the project.** Status **open**:
 > reproduced four times, cause not established. Full record: [blue/green does not
@@ -532,6 +535,9 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > deployment with a bake period, alarm-triggered rollback and three Lambda hooks,
 > none of which observes the new revision in isolation.**
 
+> **Resolved 2026-09-01 — see the resolution amendment below this block.** The
+> account that follows is contemporaneous and is left as written.
+>
 > **Amended in execution (2026-08-31) — the dark canary rolled back a good
 > deployment on a TLS handshake.** Full record: [the transport
 > timeout](./phases/phase6/2026-08-31-dark-canary-transport-timeout.md).
@@ -558,6 +564,55 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 >   standing between a bad build and production. It wants its own branch — and it
 >   should follow the isolation fix, since until then the hook is not judging the
 >   right revision anyway.
+
+> **Resolved (2026-09-01) — all three Phase 6 exit criteria are met, and both
+> amendments above are closed.** Branch
+> `fix/blue_green_isolation_and_dark_canary_transport_timeout`. Records:
+> [isolation](./phases/phase6/2026-08-31-blue-green-does-not-isolate.md) §7,
+> [transport timeout](./phases/phase6/2026-08-31-dark-canary-transport-timeout.md) §7,
+> [pre-scale](./phases/phase6/2026-08-31-pre-scale-hook-cold-start.md) §7.
+> Evidence: [criterion 2](./evidence/phase-06-exit-criterion-2.txt),
+> [criterion 3](./evidence/phase-06-exit-criterion-3.txt).
+>
+> - **The isolation defect was in this repository, not in ECS.** ECS decides
+>   which target group is live by **reading the production listener rule**; it
+>   never swaps `alternateTargetGroupArn`, which declares the *pair* rather than
+>   the roles. Neither `aws_lb_listener_rule` carried `ignore_changes`, so ECS's
+>   rewrite looked like drift and every apply reverted it seconds before the
+>   deployment that apply had just started — telling ECS blue was live when green
+>   was. The fix is two `lifecycle` blocks.
+> - **The amendment above got two things right and one wrong.** "The
+>   configuration is not the cause" was right about every *field* and wrong about
+>   the *absence* of one. And the proposed experiment — inverting the initial
+>   assignment — would have confirmed itself for the wrong reason: it moves the
+>   defect to the other colour without curing it.
+> - **Exit criterion 2 is met**, twice, on two deployments of different builds,
+>   with the colours alternating (create → green, deploy-1 → blue, deploy-2 →
+>   green). One alternation could be luck; two in opposite directions cannot.
+> - **Exit criterion 3 is met, so Phase 11's first demonstration is unblocked.**
+>   A deliberately wrong `BGD_EXPECT_DIGEST` made the post-test hook reject a real
+>   deployment: the production listener rule read `green` in **every** sample
+>   while the incoming revision sat isolated in blue behind `:8443`. The bad build
+>   received no production traffic at all.
+> - **It was also causing an unreported production outage on every deployment.**
+>   `PRE_SCALE_UP`'s "4 invocations, 0 rejected" was never evidence `:443` was
+>   healthy — three of the four were 503s from an emptied target group, swallowed
+>   by `BGD_ALLOW_UNSERVED` at `INFO`. That line is now a `WARNING`.
+> - **The transport fix is applied**, `urllib` → `http.client`, so transport and
+>   application failures are separated structurally rather than by guessing at
+>   exception text. Two of the explanations in the amendment above are **refuted**
+>   by the CloudWatch `REPORT` durations: cold `:8443` probes complete three
+>   requests in 0.4–1.0s, so the cold-listener story is wrong, and the "only the
+>   `:8443` hook failed" table is n=1 (4/11 ≈ 36% by chance). The 10.4s rejection
+>   was an outlier, not a cost of the design.
+> - **Still open, and belonging to Phase 11:** ECS's operator-facing message is
+>   still `HookStatus must not be null` rather than the rejection — now observed
+>   against a *deliberate* rejection, which is the evidence needed to decide
+>   whether to return `{"hookStatus": "FAILED"}` instead. And the ADR on
+>   ECS-native over CodeDeploy should record this as a cost of the **ownership
+>   model** — Terraform and a deployment controller both holding an opinion about
+>   one mutable field — not of that choice. CodeDeploy would have had the same
+>   problem in the same place.
 
 ### Phase 7 — Infrastructure pipeline
 

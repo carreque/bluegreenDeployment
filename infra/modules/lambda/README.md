@@ -86,7 +86,7 @@ D10 and F2.
 
 `main.tf` carried a note telling Phase 9 to re-examine its six suppressions,
 because a metrics collector added to this module inherits every one of them.
-Five hold unchanged for the same reasons Phase 6 gave — one urllib call is
+Five hold unchanged for the same reasons Phase 6 gave — one http.client call is
 already logged in full (`CKV_AWS_50`), concurrency is bounded by how rarely
 deployments and pipeline executions happen (`CKV_AWS_115`), CloudWatch, SNS
 and CodePipeline are public API endpoints reachable with no VPC (`CKV_AWS_117`),

@@ -109,20 +109,44 @@ variable "hook_timeout_seconds" {
   description = <<-EOT
     Timeout for each lifecycle hook function, in seconds.
 
-    Sixty, by arithmetic rather than taste. The handler probes three paths in
-    sequence and /ready is allowed max(BGD_TIMEOUT_SECONDS, 30) because Phase 5's
-    F5 measured /ready taking 25.6 seconds to fail when DynamoDB is unreachable —
-    botocore retries with backoff. Worst case is therefore 10s + 30s + 10s = 50s
-    of probing. A 30-second function would be killed mid-/ready, ECS would see an
-    invocation error, and plan §D3 makes that a rejection of a build that was
-    fine. Plan Task 2 Step 3.
+    Ninety, by arithmetic rather than taste. The handler opens ONE connection
+    and issues three requests over it, and it retries the connection — and only
+    the connection — when the transport fails:
+
+      connect(), 3 attempts x 10s      30s
+      backoff between attempts, 1 + 3   4s
+      /health read                      5s
+      /ready read                      30s   Phase 5 F5: 25.6s to fail when
+      /version read                     5s   DynamoDB is unreachable
+                                       ----
+                                       74s   + a 5s reserve = 79s
+
+    /ready keeps the larger budget because botocore retries with backoff and a
+    shorter cap would report a timeout instead of the 503 that names the real
+    cause — on exactly the failure the dark canary exists to catch.
+
+    A function killed mid-probe produces an invocation error, and plan §D3 makes
+    that a rejection of a build that was fine. The handler holds its own deadline
+    from context.get_remaining_time_in_millis() so it returns a reasoned verdict
+    rather than being killed, and this value is what that deadline is derived
+    from.
+
+    Sixty was the previous value, sized for 10 + 30 + 10 = 50s of probing with no
+    retry. One deployment in four was then reversed by a single TLS handshake
+    that hung for ten seconds. See
+    docs/phases/phase6/2026-08-31-dark-canary-transport-timeout.md.
+
+    ECS imposes no competing limit: describe-services reports each hook's
+    timeoutConfiguration as timeoutInMinutes 1440, action ROLLBACK. Confirmed
+    against the real service on 2026-09-01, so raising this costs nothing but
+    the wall-clock of a deployment that is already failing.
   EOT
   type        = number
-  default     = 60
+  default     = 90
 
   validation {
-    condition     = var.hook_timeout_seconds >= 60
-    error_message = "hook_timeout_seconds must be at least 60; three sequential probes are worst-case 50s."
+    condition     = var.hook_timeout_seconds >= 90
+    error_message = "hook_timeout_seconds must be at least 90; three reads plus a retried connection are worst-case 74s, and the handler reserves 5s to return a verdict rather than be killed."
   }
 }
 

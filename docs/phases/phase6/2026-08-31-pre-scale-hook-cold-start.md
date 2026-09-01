@@ -1,6 +1,11 @@
 # Phase 6 — the PRE_SCALE_UP hook made the first deployment impossible
 
 **Date:** 2026-08-31
+**Status:** **Closed 2026-09-01.** The escape was fixed on the night; what
+2026-09-01 added was §7 — the escape had been *concealing* a real production
+outage on three of its four invocations, because it logged at `INFO`. It now
+logs at `WARNING`, and a rebuild plus two deployments confirmed it fires on the
+create alone.
 **Found:** on the first real production deployment, driven by the application pipeline
 **Execution:** `bgd-us-east-1-app-deploy-prod-build:52db97ff-78b7-4b4d-aa31-d761abb690c7`
 **Files:** `lambdas/lifecycle_hook/handler.py`,
@@ -147,3 +152,89 @@ it is the right place to decide.
 `SUCCEEDED` against a refused connection when the flag is set, and rejects
 without it. The claim that production can be created is only made when a real
 deployment reaches `POST_TEST_TRAFFIC_SHIFT` — recorded when it does, not before.
+
+---
+
+## 7. What the flag was also hiding (2026-09-01)
+
+The escape works. It also concealed a production outage on every deployment for
+the rest of that night, and the concealment was a property of the **log level**,
+not of the flag.
+
+`PRE_SCALE_UP` finished the night with four invocations and zero rejections. That
+was read, here and in the other two records, as evidence that `:443` was healthy
+whenever the hook looked. It was not. The log group says:
+
+```
+19:47:50  /health returned 503                       ← the genuine create
+20:46:46  /version was unreachable after 10s         ← an ordinary deployment
+20:54:50  /health returned 503                       ← an ordinary deployment
+21:11:33  /health returned 503                       ← an ordinary deployment
+```
+
+Three of the four were ordinary deployments against a **running** service, and
+each followed a Terraform `ModifyRule` by 13 to 21 seconds. `:443` really was
+returning 503, because
+[the production listener rule had just been reverted to an empty target
+group](./2026-08-31-blue-green-does-not-isolate.md) — and the flag logged it at
+`INFO` and proceeded.
+
+The control arrived with the fix for that defect: the 2026-09-01 deployment, run
+with no `terraform apply` in front of it, fired `PRE_SCALE_UP` at 06:19:56 and
+logged no "not serving yet" line at all.
+
+### What changed here
+
+The line is now `LOGGER.warning`, not `LOGGER.info`. It records a probe that
+**failed and was allowed through anyway**, and at `INFO` it was indistinguishable
+from routine output. `test_the_unserved_escape_is_logged_loudly_enough_to_notice`
+asserts the level, because the level is the finding.
+
+After the `alb.tf` fix this line must not appear on anything but a create or a
+rebuild. If it does, something is still pointing the production listener at an
+empty group.
+
+**Confirmed 2026-09-01.** A rebuild from a destroyed account followed by two
+ordinary deployments produced exactly one occurrence, on the create:
+
+```
+14:21:50  [WARNING]  stage=PRE_SCALE_UP proceeding: … is not serving yet
+                     (/health returned 503). BGD_ALLOW_UNSERVED is set, so this
+                     is a create or a rebuild rather than a rejection.
+14:36:57  [INFO]     stage=PRE_SCALE_UP probed=… git_sha=6f24d09
+```
+
+The create needs the escape and used it. The ordinary deployment probed `:443`
+successfully and reported the outgoing revision — which is the correct answer at
+that stage, and the thing that was never once true on 2026-08-31. Three of four
+invocations that night were masked 503s; one of three here is a legitimate
+create.
+
+### What did not change
+
+**The flag itself.** §3's argument is untouched: `make rebuild` recreates prod
+from nothing on every teardown cycle, so `PRE_SCALE_UP` meets an unserved
+listener on every one, and the escape is what makes the platform's destroy-and-
+rebuild promise work for production.
+
+Narrowing it to a precise "is this a create?" condition was considered and is not
+possible from the event. The payload is now fully known —
+
+```json
+{"executionDetails": {"testTrafficWeights": {}, "productionTrafficWeights": {},
+                      "serviceArn": "...", "targetServiceRevisionArn": "..."},
+ "executionId": "...", "lifecycleStage": "PRE_SCALE_UP",
+ "resourceArn": ".../service-deployment/..."}
+```
+
+— and it carries the **target** revision but no source revision, so a create and
+a redeploy are indistinguishable to this handler. The blunt flag remains the only
+mechanism available; what it now costs is a warning rather than silence.
+
+### Plan §F2 is now fully retired
+
+§5 left it half open. The payload above is the confirmation that was missing —
+observed on every invocation of all three hooks, on two separate days. The
+remaining question is unchanged and still Phase 11's: whether to replace the
+raise with a returned `{"hookStatus": "FAILED"}`. That decision was not made
+here either.
