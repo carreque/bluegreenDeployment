@@ -76,6 +76,13 @@ compose passes no build arguments, and both services would report `slate`.
    `https://<api host>:8443/`. The test listener is directly reachable from
    any network (F2); no tunnel, no security-group change.
 
+   If the ALB was rebuilt recently, confirm the hostname still resolves to
+   the current ALB before opening either window: a rebuild creates a new ALB,
+   and a stale local resolver serving the destroyed one reads exactly like an
+   unstable rollout. [The Phase 6 runbook](./phase-06-prod-blue-green.md)
+   works around this with `curl --resolve`, but a browser has no equivalent —
+   flush the resolver or re-check with `dig` first.
+
 3. Flip the colour and push:
 
    ```bash

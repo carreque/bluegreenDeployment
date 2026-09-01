@@ -94,11 +94,25 @@ SECURITY_HEADERS = (
 
 
 class SecurityHeadersMiddleware:
-    """Append SECURITY_HEADERS to every HTTP response.
+    """Append SECURITY_HEADERS to every HTTP response this middleware sees.
 
     Raw ASGI rather than BaseHTTPMiddleware, matching RequestContextMiddleware
     above: the two now both wrap send, and mixing the two styles would put an
     anyio task boundary between them for no gain.
+
+    One response this middleware never sees: the 500 built by the
+    @app.exception_handler(Exception) handler in errors.py. Starlette's stack
+    is ServerErrorMiddleware -> user middleware -> ExceptionMiddleware ->
+    router, and that handler is wired to ServerErrorMiddleware, one layer
+    outside both custom middlewares here. A response on that path goes
+    straight to the raw `send` and carries none of SECURITY_HEADERS — no CSP,
+    no nosniff, no X-Frame-Options, no Referrer-Policy. This mirrors the
+    x-request-id gap RequestContextMiddleware already documents above, and the
+    same reasoning is why it is left alone rather than closed: the body on
+    that path is a fixed application/problem+json document with no
+    request-derived content, so the missing headers cost nothing a real
+    response would need them for. Recorded rather than fixed, and asserted by
+    test_errors.py::test_an_unhandled_exception_carries_no_security_headers.
     """
 
     def __init__(self, app: Callable) -> None:

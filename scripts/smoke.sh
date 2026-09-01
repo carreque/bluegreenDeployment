@@ -4,7 +4,7 @@
 #
 #   scripts/smoke.sh <staging|prod>
 #
-# Asserts four things, in order of what they rule out:
+# Asserts six things, in order of what they rule out:
 #
 #   1. /health answers 200 over TLS          the ALB, the certificate, the
 #                                            target group and the task are all up

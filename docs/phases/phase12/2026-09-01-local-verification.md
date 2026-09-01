@@ -111,7 +111,9 @@ tables ready
 ```
 
 Both `make build` and `make image-test` rebuilt the image independently and
-produced the identical digest `sha256:872dfd8b24b9eabea31f342f6889805a735cb605f32f4c76f69bd745d83ac3e4` — the same input, `app/RELEASE_COLOR = blue`, at the same commit.
+produced the same digest twice from the same input — `sha256:872dfd8b24b9eabea31f342f6889805a735cb605f32f4c76f69bd745d83ac3e4`, from `app/RELEASE_COLOR = blue` at the same commit. Two sequential builds seconds
+apart on one machine is not what "reproducible" means; that claim is `make
+image-verify`, below.
 
 ```
 $ make image-verify

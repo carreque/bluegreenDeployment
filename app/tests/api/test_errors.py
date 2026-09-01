@@ -110,6 +110,29 @@ def test_an_unhandled_exception_still_reports_the_caller_s_request_id(client) ->
     assert response.json()["request_id"] == "known-id-123"
 
 
+def test_an_unhandled_exception_carries_no_security_headers(client) -> None:
+    """A deliberate gap, asserted so that closing it wrongly is a red test.
+
+    @app.exception_handler(Exception) is wired to ServerErrorMiddleware
+    (Starlette's stack is ServerErrorMiddleware -> user middleware ->
+    ExceptionMiddleware -> router), one layer outside both
+    RequestContextMiddleware and SecurityHeadersMiddleware. The response this
+    handler builds is sent straight through the raw `send`, the same reason
+    it carries no x-request-id header (see the test above). It carries none
+    of SECURITY_HEADERS either — no CSP, no nosniff, no X-Frame-Options, no
+    Referrer-Policy. Left alone rather than closed: the body on this path is
+    a fixed application/problem+json document with no request-derived
+    content, so there is nothing here for those headers to protect.
+    """
+    response = client.get("/probe/boom")
+    assert response.status_code == 500
+    assert "content-security-policy" not in response.headers
+    assert "x-content-type-options" not in response.headers
+    assert "x-frame-options" not in response.headers
+    assert "referrer-policy" not in response.headers
+    assert "x-request-id" not in response.headers
+
+
 def test_every_domain_error_code_has_a_status(client) -> None:
     """A new DomainError subclass with no entry in STATUS_BY_CODE would
     silently become a 500. Walking the subclasses is what keeps the map

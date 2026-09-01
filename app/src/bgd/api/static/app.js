@@ -8,6 +8,13 @@
 const FAST_INTERVAL_MS = 2000;
 const SLOW_INTERVAL_MS = 10000;
 const FAILURES_BEFORE_BACKOFF = 3;
+// Without this, a /version request that hangs — a target group draining
+// connections mid-shift is a realistic way to get one — leaves tickInFlight
+// true and pollTimer null indefinitely: restartPolling() keeps early-
+// returning, the catch in tick() never runs, and last-checked never becomes
+// "unreachable". The banner would show a stale colour with no sign it had
+// stopped updating.
+const FETCH_TIMEOUT_MS = 5000;
 
 // The closed set from the server's Literal (D6). A token the CSS has no rule
 // for would drop the page to the "unknown" palette rather than to no palette.
@@ -55,7 +62,10 @@ function applyVersion(body) {
 }
 
 async function refresh() {
-  const response = await fetch("/version", { cache: "no-store" });
+  const response = await fetch("/version", {
+    cache: "no-store",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!response.ok) {
     throw new Error("/version answered " + response.status);
   }

@@ -39,14 +39,18 @@ def test_the_csp_has_no_inline_escape_hatch(client) -> None:
     """The entire reason the page is three files rather than one (D5).
 
     A single self-contained HTML file forces script-src 'unsafe-inline', which
-    is the one directive that makes a CSP close to worthless.
+    is the one directive that makes a CSP close to worthless. Asserted as a
+    full-string equality, not substrings, so a malformed or deleted directive
+    anywhere in the policy — not only script-src — fails this test.
     """
     policy = client.get("/health").headers["content-security-policy"]
     assert "unsafe-inline" not in policy
     assert "unsafe-eval" not in policy
-    assert "default-src 'none'" in policy
-    assert "script-src 'self'" in policy
-    assert "connect-src 'self'" in policy
+    assert policy == (
+        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "connect-src 'self'; img-src 'none'; base-uri 'none'; "
+        "form-action 'none'; frame-ancestors 'none'"
+    )
 
 
 def test_the_request_id_header_survives_the_new_middleware(client) -> None:
@@ -131,3 +135,4 @@ def test_the_page_is_not_in_the_openapi_schema(client) -> None:
     paths = client.get("/openapi.json").json()["paths"]
     assert "/" not in paths
     assert "/app.js" not in paths
+    assert "/app.css" not in paths
