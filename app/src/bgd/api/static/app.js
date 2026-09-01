@@ -16,6 +16,14 @@ const COLORS = ["blue", "green", "slate"];
 let consecutiveFailures = 0;
 let pollTimer = null;
 let currentSha = "unknown";
+// True for the whole duration of an in-flight tick(), including the awaited
+// /version fetch. pollTimer stays null for that whole span too, because
+// scheduleNext() only runs as tick() is finishing — so without this flag a
+// visibilitychange firing mid-fetch would find nothing for restartPolling()
+// to clearTimeout, and would start a second, independent tick() chain that no
+// later restartPolling() could ever fully cancel: the poll rate would creep
+// upward for the life of the tab, the opposite of D7.
+let tickInFlight = false;
 
 // account_id -> the git_sha this tab was talking to when it POSTed. Client
 // side only, and labelled as such: the API does not record which build created
@@ -60,28 +68,47 @@ function scheduleNext() {
 }
 
 async function tick() {
-  // D7. Every poll is an ALB request and one access-log line; a hidden tab
-  // pays that for nobody. A page left open across a teardown backs off too,
-  // rather than hammering a dead load balancer until somebody closes it.
-  if (document.visibilityState !== "visible") {
-    scheduleNext();
-    return;
-  }
-
+  // Held for the whole function, across the await below, so restartPolling()
+  // can tell "a fetch is in flight" apart from "nothing is scheduled" — see
+  // tickInFlight's declaration for what goes wrong without it.
+  tickInFlight = true;
   try {
-    await refresh();
-    consecutiveFailures = 0;
-  } catch (error) {
-    consecutiveFailures += 1;
-    // A stalled poller must be visible rather than silently stale: an old
-    // colour on screen with no sign that it stopped updating is the one
-    // failure mode that looks exactly like success.
-    setText("last-checked", "unreachable");
+    // D7. Every poll is an ALB request and one access-log line; a hidden tab
+    // pays that for nobody. A page left open across a teardown backs off too,
+    // rather than hammering a dead load balancer until somebody closes it.
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+
+    try {
+      await refresh();
+      consecutiveFailures = 0;
+    } catch (error) {
+      consecutiveFailures += 1;
+      // A stalled poller must be visible rather than silently stale: an old
+      // colour on screen with no sign that it stopped updating is the one
+      // failure mode that looks exactly like success.
+      setText("last-checked", "unreachable");
+    }
+  } finally {
+    // Runs for every exit from the try above, including the early return.
+    // scheduleNext() lands before tickInFlight clears, so the two flags this
+    // module relies on — "a timer is scheduled" and "a tick is in flight" —
+    // are never both false at once and never both true at once.
+    scheduleNext();
+    tickInFlight = false;
   }
-  scheduleNext();
 }
 
 function restartPolling() {
+  if (tickInFlight) {
+    // A tick() is already awaiting /version, so pollTimer is null right now —
+    // there is nothing here to clearTimeout, and calling tick() again would
+    // start the second chain described above. The in-flight tick's own
+    // finally block will call scheduleNext() when it finishes, which keeps
+    // the single chain alive without this call doing anything.
+    return;
+  }
   if (pollTimer !== null) {
     window.clearTimeout(pollTimer);
     pollTimer = null;
