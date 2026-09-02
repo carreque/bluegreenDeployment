@@ -29,37 +29,7 @@ variables {
 }
 
 mock_provider "aws" {
-  mock_resource "aws_iam_role" {
-    defaults = { arn = "arn:aws:iam::590184028094:role/mock" }
-  }
-
-  mock_resource "aws_dynamodb_table" {
-    defaults = { arn = "arn:aws:dynamodb:us-east-1:590184028094:table/mock" }
-  }
-
-  mock_resource "aws_cloudwatch_log_group" {
-    defaults = { arn = "arn:aws:logs:us-east-1:590184028094:log-group:mock" }
-  }
-
-  mock_resource "aws_lb" {
-    defaults = {
-      arn      = "arn:aws:elasticloadbalancing:us-east-1:590184028094:loadbalancer/app/mock/0123456789abcdef"
-      dns_name = "mock-alb-123.us-east-1.elb.amazonaws.com"
-      zone_id  = "Z35SXDOTRQ7X7K"
-    }
-  }
-
-  mock_resource "aws_lb_target_group" {
-    defaults = { arn = "arn:aws:elasticloadbalancing:us-east-1:590184028094:targetgroup/mock/0123456789abcdef" }
-  }
-
-  mock_resource "aws_ecs_task_definition" {
-    defaults = { arn = "arn:aws:ecs:us-east-1:590184028094:task-definition/mock:1" }
-  }
-
-  mock_data "aws_ecr_image" {
-    defaults = { image_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111" }
-  }
+  source = "./tests/mocks"
 }
 
 # Without these two overrides the tests reach the real S3 backend and fail on

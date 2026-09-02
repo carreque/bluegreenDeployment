@@ -3,40 +3,7 @@
 # the least-privilege claim in the design would be decoration.
 
 mock_provider "aws" {
-  mock_data "aws_availability_zones" {
-    defaults = {
-      names = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d"]
-    }
-  }
-
-  # Every run block applies the whole root module, including the flow-logs
-  # resources from Task 5. A mocked provider intercepts aws_iam_policy_document
-  # and mocks its "json" attribute to "", which aws_iam_role's own schema
-  # validation rejects as an assume role policy before apply runs; mocked
-  # resources' computed "arn" attributes default to an opaque string rather
-  # than an ARN, and aws_flow_log.this feeds those back in as arguments the
-  # provider validates client-side as ARNs. Both defaults below exist only to
-  # keep validation happy, not to be inspected by any assertion here.
-  mock_data "aws_iam_policy_document" {
-    defaults = {
-      json = jsonencode({
-        Version   = "2012-10-17"
-        Statement = []
-      })
-    }
-  }
-
-  mock_resource "aws_cloudwatch_log_group" {
-    defaults = {
-      arn = "arn:aws:logs:us-east-1:590184028094:log-group:/bgd/us-east-1/shared/vpc-flow"
-    }
-  }
-
-  mock_resource "aws_iam_role" {
-    defaults = {
-      arn = "arn:aws:iam::590184028094:role/bgd-us-east-1-shared-flow-logs-role"
-    }
-  }
+  source = "./tests/mocks"
 }
 
 variables {

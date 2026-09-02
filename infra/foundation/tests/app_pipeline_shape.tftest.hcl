@@ -28,28 +28,7 @@
 # is exactly what D6's structural separation exists to prevent, so the test
 # must be able to see it.
 mock_provider "aws" {
-  mock_resource "aws_acm_certificate" {
-    defaults = {
-      domain_validation_options = [
-        {
-          domain_name           = "api.carloscloudengineer.com"
-          resource_record_name  = "_mock.api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-        {
-          domain_name           = "staging-api.carloscloudengineer.com"
-          resource_record_name  = "_mock.staging-api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-      ]
-    }
-  }
-
-  mock_resource "aws_sns_topic" {
-    defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
-  }
+  source = "./tests/mocks"
 }
 
 # One override per role, never one mock_resource default for the type:

@@ -86,4 +86,12 @@ make tf-check          # validate + lint + test, no AWS session needed
 
 `TF_ROOTS` in the makefile lists four names, not five: `staging` and `prod`
 resolve to the same directory, and `infra/tests/` holds both suites, so one
-`terraform test` runs all 53 assertions. Listing both would run all 53 twice.
+`terraform test` runs all 59 assertions. Listing both would run all 59 twice.
+
+Each layer's shared provider mocks live in `<layer>/tests/mocks/aws.tfmock.hcl`
+and are loaded with `mock_provider "aws" { source = "./tests/mocks" }` — the
+path is relative to the root module, not the test file. Each suite still carries
+its own `variables` and `override_data` blocks, because both are test-file
+scoped: Terraform parses an `override_data` inside a `.tfmock.hcl` without
+complaint and then ignores it, so the suite would reach the real S3 backend.
+The mock files say so at the top.
