@@ -314,7 +314,7 @@ run "the_collector_is_watched_by_something_that_is_not_the_collector" {
 
 # Every name Task 11's runbook and any later document depend on by string,
 # pinned here, so a rename fails in this layer rather than as a null lookup
-# three documents later — the same reason infra/environments/prod/tests/
+# three documents later — the same reason infra/tests/
 # outputs.tftest.hcl pins hook_function_names and bake_alarm_names.
 run "the_outputs_the_runbook_and_later_documents_consume_are_present" {
   command = apply

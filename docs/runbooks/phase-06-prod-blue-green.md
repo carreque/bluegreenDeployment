@@ -1,7 +1,7 @@
 # Runbook — Phase 6: production apply and the blue/green demonstration
 
 **Date:** 2026-08-29
-**Layer:** `infra/environments/prod`
+**Layer:** `infra/ (enable_prod = true)`
 **Estimated time:** 90–120 minutes end to end. The first apply is 10–15 minutes;
 each blue/green deployment after it is 8–12, most of which is the five-minute
 bake you are not allowed to skip
@@ -104,9 +104,9 @@ production traffic shift rather than at apply.
 ## 4. Set `image_tag`
 
 ```bash
-cp infra/environments/prod/terraform.tfvars.example infra/environments/prod/terraform.tfvars
+cp infra/terraform.tfvars.example infra/terraform.tfvars
 cat app/dist/image-ref.txt        # or a tag from step 1
-$EDITOR infra/environments/prod/terraform.tfvars
+$EDITOR infra/terraform.tfvars
 ```
 
 ---
@@ -187,8 +187,8 @@ make smoke-prod
 Then by hand, both listeners:
 
 ```bash
-API="$(terraform -chdir=infra/environments/prod output -raw api_url)"
-TEST="$(terraform -chdir=infra/environments/prod output -raw test_url)"
+API="$(terraform -chdir=infra/ (enable_prod = true) output -raw api_url)"
+TEST="$(terraform -chdir=infra/ (enable_prod = true) output -raw test_url)"
 
 curl -sS "$API/health" | jq .
 curl -sS "$API/ready"  | jq .        # exercises DynamoDB — must be 200, not 503
@@ -212,7 +212,7 @@ contract (plan §D3): it **returns** `{"hookStatus": "SUCCEEDED"}` on success an
 **raises** on failure.
 
 ```bash
-for f in $(terraform -chdir=infra/environments/prod output -json hook_function_names | jq -r '.[]'); do
+for f in $(terraform -chdir=infra/ (enable_prod = true) output -json hook_function_names | jq -r '.[]'); do
   echo "=== $f ==="
   aws logs tail "/aws/lambda/$f" --since 30m --format short
 done
@@ -241,7 +241,7 @@ done
 
 ```bash
 aws cloudwatch describe-alarms \
-  --alarm-names $(terraform -chdir=infra/environments/prod output -json bake_alarm_names | jq -r '.[]') \
+  --alarm-names $(terraform -chdir=infra/ (enable_prod = true) output -json bake_alarm_names | jq -r '.[]') \
   --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Reason:StateReason}' --output table
 ```
 
@@ -306,15 +306,15 @@ produces a new digest and a new SHA.
 Terminal A — initiate:
 
 ```bash
-$EDITOR infra/environments/prod/terraform.tfvars   # image_tag = the new tag
+$EDITOR infra/terraform.tfvars   # image_tag = the new tag
 make apply-prod
 ```
 
 Terminal B — observe (D10: Terraform initiates, the CLI observes):
 
 ```bash
-CLUSTER="$(terraform -chdir=infra/environments/prod output -raw cluster_name)"
-SERVICE="$(terraform -chdir=infra/environments/prod output -raw service_name)"
+CLUSTER="$(terraform -chdir=infra/ (enable_prod = true) output -raw cluster_name)"
+SERVICE="$(terraform -chdir=infra/ (enable_prod = true) output -raw service_name)"
 
 DEPLOYMENT=$(aws ecs list-service-deployments \
   --cluster "$CLUSTER" --service "$SERVICE" \
@@ -406,8 +406,8 @@ minutes wide.** Have this loop running in a third terminal *before* you start
 step 12:
 
 ```bash
-API="$(terraform -chdir=infra/environments/prod output -raw api_url)"
-TEST="$(terraform -chdir=infra/environments/prod output -raw test_url)"
+API="$(terraform -chdir=infra/ (enable_prod = true) output -raw api_url)"
+TEST="$(terraform -chdir=infra/ (enable_prod = true) output -raw test_url)"
 
 while true; do
   printf '%s  443=%s  8443=%s\n' \
@@ -443,7 +443,7 @@ which is what keeps this from being the "simulated failure toggle" Phase 11's
 evidence standard forbids.
 
 ```bash
-POST_TEST="$(terraform -chdir=infra/environments/prod output -json hook_function_names \
+POST_TEST="$(terraform -chdir=infra/ (enable_prod = true) output -json hook_function_names \
              | jq -r '.[] | select(endswith("post-test-hook"))')"
 
 aws lambda update-function-configuration \

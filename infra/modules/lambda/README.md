@@ -112,7 +112,7 @@ EventBridge's own default of 185 attempts over 24 hours.
 It has no logic: no conditionals beyond one `dynamic` block that omits an empty
 environment, no `for_each`, no computed names. The calling layers' assertions
 on its four real instantiations — the three lifecycle hooks in
-[`prod/tests/bluegreen.tftest.hcl`](../../environments/prod/tests/bluegreen.tftest.hcl)
+[`tests/prod_bluegreen.tftest.hcl`](../../tests/prod_bluegreen.tftest.hcl)
 and the release metrics collector in
 [`foundation/tests/observability.tftest.hcl`](../../foundation/tests/observability.tftest.hcl)
 — test everything it does. A suite over a module with no branches asserts that

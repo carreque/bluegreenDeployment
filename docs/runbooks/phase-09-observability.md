@@ -3,7 +3,7 @@
 **Date:** 2026-08-30
 **Layer:** `infra/foundation` (the collector, its two rules, the dashboard, its own
 errors alarm) plus four one-line `alarm_actions` changes in
-`infra/environments/prod`
+`infra/ (enable_prod = true)`
 **Estimated time:** 60–90 minutes, not counting a fresh production bake if
 step 7 needs one from scratch — Phase 8's runbook already covers that wait
 **Cost while it exists:** small. Plan §F10 puts the seven metric streams at
@@ -440,12 +440,12 @@ no deployment or bake follows. Generate two minutes of real traffic (the
 alarm needs two consecutive breaching minutes — `evaluation_periods = 2`):
 
 ```bash
-API="$(terraform -chdir=infra/environments/prod output -raw api_url)"
+API="$(terraform -chdir=infra/ (enable_prod = true) output -raw api_url)"
 for i in $(seq 1 60); do curl -s "$API/version" >/dev/null; sleep 2; done
 ```
 
 ```bash
-P95_ALARM="$(terraform -chdir=infra/environments/prod output -json bake_alarm_names | jq -r '.[] | select(contains("p95"))')"
+P95_ALARM="$(terraform -chdir=infra/ (enable_prod = true) output -json bake_alarm_names | jq -r '.[] | select(contains("p95"))')"
 
 aws cloudwatch describe-alarms --alarm-names "$P95_ALARM" \
   --query 'MetricAlarms[0].{State:StateValue,Reason:StateReason}' --output table
@@ -482,7 +482,7 @@ The Phase 6 runbook's step 10 already has the exercise: read the four bake
 alarms' states under real traffic and record the measured p95, the observed
 5xx count and the unhealthy-host behaviour, replacing "chosen, not measured"
 with real numbers. Repeat it here rather than duplicating it —
-`infra/environments/prod/alarms.tf` and the Phase 6 runbook both say the
+`infra/alarms.tf` and the Phase 6 runbook both say the
 thresholds were chosen, not measured, and nothing in this phase changes that
 fact by itself.
 

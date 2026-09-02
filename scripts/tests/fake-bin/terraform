@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# A terraform that runs nothing and records everything.
+#
+# Sibling of fake-bin/aws, and it exists for one property that has no other
+# offline test: since the 2026-09-02 environments merge, staging and prod are
+# the same root module, and what separates them is a pair of files that
+# scripts/tf.sh derives from a layer name. Nothing in the Terraform binds
+# environments/prod.tfvars to prod/terraform.tfstate — tf.sh does.
+#
+# Deploying is the only other way to find out whether it does it correctly, and
+# finding out that way means finding out on production.
+#
+# Every invocation appends one line to $FAKE_TF_LOG: the subcommand followed by
+# the full argument list, one invocation per line, in order. tf.sh calls
+# terraform twice for most commands (init, then the command itself), and the
+# tests assert on both.
+#
+# Always exits 0. This fake has no opinion about whether a plan would succeed —
+# it is a record of what tf.sh ASKED for, which is the only thing under test.
+
+if [[ -n "${FAKE_TF_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$FAKE_TF_LOG"
+fi
+
+# `terraform version` is probed by require_cmd's callers in some scripts, and a
+# couple of places parse it. Cheap to answer honestly.
+if [[ "${1:-}" == "version" || "${1:-}" == "--version" ]]; then
+  echo "Terraform v1.15.7"
+fi
+
+exit 0

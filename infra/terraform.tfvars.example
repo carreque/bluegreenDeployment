@@ -1,0 +1,52 @@
+# Copy to terraform.tfvars, which is gitignored, and set image_tag.
+#
+#   cp infra/terraform.tfvars.example infra/terraform.tfvars
+#
+# This file holds ONE value, and that is the whole point of it.
+#
+# Everything else that distinguishes staging from production lives in
+# environments/staging.tfvars and environments/prod.tfvars, which ARE committed:
+# environment, enable_prod, desired_count. Those describe the shape of an
+# environment, which is source. scripts/tf.sh passes the right one automatically
+# based on the layer name you give it.
+#
+# image_tag is different. It changes with every build, it is the single input
+# that decides what actually gets deployed, and a value committed anywhere would
+# go stale the moment somebody pushed an image. So it is declared with no default
+# — terraform plan fails by name if it is missing rather than deploying something
+# arbitrary — and it arrives from exactly one of three places:
+#
+#   this file          a local `make plan-staging` / `make apply-prod`
+#   -var image_tag=…   scripts/pipeline-deploy.sh, from #{Build.IMAGE_TAG}
+#   SSM                scripts/pipeline-terraform.sh, from /bgd/<env>/image_tag
+#
+# Terraform auto-loads terraform.tfvars, and the explicit -var-file that tf.sh
+# passes is applied on top of it, so the two never fight: this file names the
+# image, that file names the environment.
+#
+#   cat app/dist/image-ref.txt      # the tag scripts/build-image.sh produced
+#
+# The tag must already be in ECR — `make seed-ecr`, or a push from the
+# application pipeline. terraform plan fails in data.aws_ecr_image otherwise, and
+# names the tag it could not find.
+#
+# On PRODUCTION (`make apply-prod`), changing this value is not a config edit —
+# it is what starts a blue/green deployment. Terraform registers a new task
+# definition revision, ECS provisions green, runs the three hooks, shifts traffic
+# and bakes for five minutes under the alarms. The apply does not return until
+# that has finished or rolled back, so expect six to ten minutes. See
+# docs/runbooks/phase-06-prod-blue-green.md.
+
+image_tag = "0.1.0-84d4eb0"
+
+# Occasionally useful, all correct as they stand. Note the defaults here are
+# STAGING's; environments/prod.tfvars overrides desired_count to 2. Setting any
+# of these in this file applies them to BOTH environments, which is rarely what
+# you want — prefer editing the committed environment file.
+#
+# task_cpu             = 256
+# task_memory          = 512
+# log_retention_days   = 14
+# bake_time_minutes    = 5
+# hook_timeout_seconds = 90
+# alarm_p95_seconds    = 2

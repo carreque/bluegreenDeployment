@@ -14,6 +14,14 @@
 # copy; lint-infra.sh keeps a variant of its own because its contract differs
 # (Phase 10 §D13, §F6).
 #
+# That paragraph was false when it was written, and is true as of 2026-09-02.
+# This script carried three open-coded copies of the map — one absolute, two
+# relative — because Phase 10 only converted the callers that wanted an absolute
+# path, and these wanted a repo-relative one. lib/common.sh now offers both, as
+# layer_dir and layer_dir_rel, and all three sites go through them. A comment
+# asserting a property nobody checks is how the property gets lost; the shell
+# suite checks this one.
+#
 # ---------------------------------------------------------------------------
 # Why this runs Terraform rather than the standard ECS deploy action
 # ---------------------------------------------------------------------------
@@ -64,16 +72,27 @@ require_cmd aws
 ROOT="$(repo_root)"
 REGION="${AWS_REGION:-us-east-1}"
 
-# Relative to the layer directory, because scripts/tf.sh runs terraform with
-# -chdir. Named to match .gitignore's *.tfplan, so a copy pulled down for
-# debugging cannot be committed.
-PLAN_FILE="pipeline.tfplan"
 VARS_FILE="$ROOT/plan-vars.env"
 DEPLOY_VARS_FILE="$ROOT/deploy-vars.env"
 
 mode="${1:-}"
 env_name="${2:-}"
 [[ -n "$mode" && -n "$env_name" ]] || die "usage: pipeline-deploy.sh <deploy|plan|apply> <staging|prod>"
+
+# Relative to the layer directory, because scripts/tf.sh runs terraform with
+# -chdir, and named to match .gitignore's *.tfplan so a copy pulled down for
+# debugging cannot be committed.
+#
+# Named for the LAYER rather than just "pipeline" since the environments merge
+# put staging and prod in one directory: both would otherwise write and read
+# infra/pipeline.tfplan, and the second plan would silently overwrite the first.
+# Harmless inside the pipeline, where every action is a fresh container, and a
+# real hazard locally where `make plan-staging` then `make plan-prod` is an
+# ordinary thing to do.
+#
+# Assigned AFTER the argument parsing below, not with the other constants above
+# it, because it now interpolates one of those arguments.
+PLAN_FILE="pipeline-${env_name}.tfplan"
 
 # Cumulative scope: the value names where a run STOPS, so a rank comparison is
 # the whole rule. `build` builds and pushes without deploying, which is what
@@ -257,9 +276,9 @@ if [[ "$mode" == "deploy" ]]; then
   # build hold no AWS credentials at all — plan §D6 — and it is why
   # scripts/smoke.sh has carried the BGD_SMOKE_URL / BGD_SMOKE_DIGEST
   # overrides since Phase 5.
-  layer_dir="$ROOT/infra/environments/$env_name"
-  url="$(terraform -chdir="$layer_dir" output -raw api_url)"
-  digest="$(terraform -chdir="$layer_dir" output -raw image_digest)"
+  dir="$(layer_dir "$env_name")"
+  url="$(terraform -chdir="$dir" output -raw api_url)"
+  digest="$(terraform -chdir="$dir" output -raw image_digest)"
   write_deploy_vars "$url" "$digest"
 
   ok "$env_name is running $IMAGE_TAG"
@@ -275,7 +294,7 @@ fi
 if [[ "$mode" == "apply" ]]; then
   require_image_tag
 
-  dir="infra/environments/$env_name"
+  dir="$(layer_dir_rel "$env_name")"
 
   [[ -f "$ROOT/$dir/$PLAN_FILE" ]] ||
     die "no saved plan at $dir/$PLAN_FILE — the Plan action in this stage must run first"
@@ -321,7 +340,7 @@ status=0
   -out="$PLAN_FILE" \
   -var "image_tag=$IMAGE_TAG" || status=$?
 
-dir="infra/environments/$env_name"
+dir="$(layer_dir_rel "$env_name")"
 
 case "$status" in
   0)

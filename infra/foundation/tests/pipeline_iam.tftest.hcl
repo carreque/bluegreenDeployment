@@ -28,7 +28,7 @@
 
 # The mocks below exist because of `command = apply`, and each was added
 # because omitting it produced a hard error rather than because it looked tidy
-# — the same rule infra/environments/prod/tests/compute.tftest.hcl follows.
+# — the same rule infra/tests/prod_compute.tftest.hcl follows.
 #
 #   aws_acm_certificate      domain_validation_options mocks to an empty set,
 #                            and acm.tf's one([...]) over it then yields null

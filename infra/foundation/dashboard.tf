@@ -70,7 +70,7 @@ locals {
           join(" ", [
             "**Bake alarm thresholds are chosen, not measured** — five",
             "target-5xx responses a minute, a 2-second p95, one unhealthy host",
-            "per colour. See infra/environments/prod/alarms.tf; the runbook",
+            "per colour. See infra/alarms.tf; the runbook",
             "records the real numbers once traffic exists to measure.",
           ]),
         ])

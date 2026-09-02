@@ -54,6 +54,46 @@ infra/
 
 Layers are wired together with `terraform_remote_state` data sources reading the S3 backend.
 
+> **Amended on 2026-09-02, after Phase 12.** The five layers still have five
+> state files, and the argument above is unchanged. What changed is that they
+> are now **four root modules**, not five: `envs/staging/` and `envs/prod/` were
+> merged into a single root module at `infra/`, applied twice.
+>
+> The two directories held roughly 1,500 lines of near-identical Terraform.
+> Production was a strict superset of staging — a second target group, a `:8443`
+> listener, two listener rules, `BLUE_GREEN` over `ROLLING`, three lifecycle
+> hooks, two extra IAM roles, three Lambdas and four alarms — and everything
+> else was the same file twice, already drifting in its comments. `dynamodb.tf`
+> and `dns.tf` differed only in prose; `locals.tf` differed in one string.
+>
+> The superset is now gated by `var.enable_prod`, and what makes an apply one
+> environment or the other lives entirely in `infra/environments/`:
+> `<env>.tfvars` for the shape, `<env>.backend.hcl` for the state key.
+>
+> **What this cost, stated plainly.** `backend "s3"` cannot interpolate, so that
+> block is now partial and the state key arrives as `-backend-config`. A literal
+> backend block made it impossible to pair one environment's configuration with
+> the other's state; that guarantee is now `scripts/tf.sh`'s, which derives both
+> from one layer name and re-runs `init -reconfigure` every time. This is
+> strictly weaker — a hand-typed `terraform -chdir=infra apply` can still get it
+> wrong — and it is why the runbooks now spell out both flags together and why
+> `make plan-<layer>` is the documented path.
+>
+> `bootstrap`, `foundation` and `network` were deliberately NOT merged. They are
+> applied once each, have no environment to select, and keep their literal
+> backend blocks. `bootstrap` additionally cannot be merged at all: it creates
+> the bucket every other layer's state lives in, so it has no backend of its own
+> and carries `prevent_destroy`.
+>
+> §1's `infra/` diagram above therefore reads `envs/staging/` and `envs/prod/`
+> where the tree now has one `infra/` root plus `infra/environments/*.tfvars`.
+> The layer NAMES are unchanged, and every `make` target, `SCOPE` value,
+> `DEPLOY_SCOPE` value and runbook step that names a layer still works.
+>
+> **ADR #3 is affected.** `docs/adr/README.md` plans "Five Terraform layers over
+> four" as an ADR; it should now be written as five *layers* over four *root
+> modules*, and record this merge as the amendment it is.
+
 A note on the pipelines living in `foundation`: the pipelines are created by a local `terraform apply`, and from then on the infra pipeline manages the layer that contains itself. This is intentional and normal, but it means a broken change to the pipeline definition must be repaired by a local apply. The detailed plan calls this out in the runbook.
 
 ---
@@ -735,7 +775,7 @@ Blue/green is exercised here by hand via the AWS CLI, before any pipeline exists
 > list.** Recorded here as well as in Phase 9's section, exactly as the
 > amendment above was recorded in both Phase 7's and Phase 8's sections.
 >
-> `infra/environments/prod/hooks.tf` has packaged
+> `infra/hooks.tf` has packaged
 > `lambdas/lifecycle_hook/handler.py` since Phase 6, and none of the six
 > patterns above matches `lambdas/`. A commit that edited only a hook's
 > handler changed no watched file: the infra pipeline would not run, and the

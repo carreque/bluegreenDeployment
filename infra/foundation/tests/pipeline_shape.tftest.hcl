@@ -7,7 +7,7 @@
 
 # The mocks below exist because of `command = apply`, and each was added
 # because omitting it produced a hard error rather than because it looked tidy
-# — the same rule infra/environments/prod/tests/compute.tftest.hcl follows.
+# — the same rule infra/tests/prod_compute.tftest.hcl follows.
 #
 #   aws_acm_certificate      domain_validation_options mocks to an empty set,
 #                            and acm.tf's one([...]) over it then yields null
@@ -382,7 +382,7 @@ run "the_trigger_filters_the_paths_the_pipeline_actually_owns" {
       "lambdas/**",
       "scripts/lint-infra.sh",
     ])
-    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12). Narrowed from pipelines/** and scripts/pipeline-*.sh in Phase 8, because both matched that phase's files (Phase 8 §F4) — widening either back reintroduces the cross-trigger. lambdas/** joins in Phase 9, but the gap it closes is Phase 6's, not Phase 8's or Phase 9's: infra/environments/prod/hooks.tf has packaged lambdas/lifecycle_hook/handler.py since Phase 6, and a handler-only commit changed no watched file until now — this asserting the set exactly is what makes finding that a one-line fix (Phase 9 §D18). scripts/lint-infra.sh joins on 2026-08-31 — the third gap of the same shape, found when the Validate stage it runs failed in CodeBuild — and is the eighth and last pattern this block can hold before a second push block is needed."
+    error_message = "scripts/** as a whole would cross-trigger a four-approval infra run on every app change; infra/** alone would ignore edits to the pipeline's own logic (plan §D12). Narrowed from pipelines/** and scripts/pipeline-*.sh in Phase 8, because both matched that phase's files (Phase 8 §F4) — widening either back reintroduces the cross-trigger. lambdas/** joins in Phase 9, but the gap it closes is Phase 6's, not Phase 8's or Phase 9's: infra/hooks.tf has packaged lambdas/lifecycle_hook/handler.py since Phase 6, and a handler-only commit changed no watched file until now — this asserting the set exactly is what makes finding that a one-line fix (Phase 9 §D18). scripts/lint-infra.sh joins on 2026-08-31 — the third gap of the same shape, found when the Validate stage it runs failed in CodeBuild — and is the eighth and last pattern this block can hold before a second push block is needed."
   }
 
   assert {

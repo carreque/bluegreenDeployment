@@ -54,8 +54,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 require_cmd curl
 require_cmd jq
 
-ROOT="$(repo_root)"
-
 # terraform is required only where it is actually used, not unconditionally
 # up front like curl and jq. If the caller supplies both BGD_SMOKE_URL and
 # BGD_SMOKE_DIGEST, the block below never invokes terraform at all — and a
@@ -71,8 +69,16 @@ case "$env_name" in
   *) die "usage: smoke.sh <staging|prod>" ;;
 esac
 
-layer_dir="$ROOT/infra/environments/$env_name"
-[[ -d "$layer_dir" ]] || die "layer '$env_name' has no directory yet"
+# layer_dir() rather than the path spelled out, so this cannot drift from
+# tf.sh's idea of where a layer lives. The case above has already rejected
+# anything but staging and prod, so layer_dir's own refusal is unreachable
+# here — it is the shared map that is wanted, not a second gate.
+#
+# Since the environments merge this resolves to infra/ for BOTH environments,
+# which is why the reads below are preceded by layer_init_backend: the directory
+# no longer identifies the state.
+dir="$(layer_dir "$env_name")"
+[[ -d "$dir" ]] || die "layer '$env_name' has no directory yet"
 
 # Read both values from Terraform unless the caller supplied them. terraform
 # output is used directly rather than through tf.sh, matching seed-ecr.sh: this
@@ -80,15 +86,25 @@ layer_dir="$ROOT/infra/environments/$env_name"
 BASE_URL="${BGD_SMOKE_URL:-}"
 EXPECTED_DIGEST="${BGD_SMOKE_DIGEST:-}"
 
+# Both reads come from one environment's state, so the backend is configured
+# once here rather than inside each branch. Skipped entirely when the caller
+# supplied both values — Phase 8's smoke build has no AWS credentials at all and
+# must not be made to need them (plan §D6).
+if [[ -z "$BASE_URL" || -z "$EXPECTED_DIGEST" ]]; then
+  require_cmd terraform
+  layer_init_backend "$env_name" 2>/dev/null ||
+    die "cannot initialise the $env_name backend — check your AWS session, or set BGD_SMOKE_URL and BGD_SMOKE_DIGEST to skip reading state"
+fi
+
 if [[ -z "$BASE_URL" ]]; then
   require_cmd terraform
-  BASE_URL="$(terraform -chdir="$layer_dir" output -raw api_url 2>/dev/null)" ||
+  BASE_URL="$(terraform -chdir="$dir" output -raw api_url 2>/dev/null)" ||
     die "cannot read the $env_name outputs — apply the layer first, or set BGD_SMOKE_URL"
 fi
 
 if [[ -z "$EXPECTED_DIGEST" ]]; then
   require_cmd terraform
-  EXPECTED_DIGEST="$(terraform -chdir="$layer_dir" output -raw image_digest 2>/dev/null)" ||
+  EXPECTED_DIGEST="$(terraform -chdir="$dir" output -raw image_digest 2>/dev/null)" ||
     die "cannot read the $env_name image digest — apply the layer first, or set BGD_SMOKE_DIGEST"
 fi
 
