@@ -41,12 +41,17 @@ AWS_ACCOUNT_ID := 590184028094
 APP_DIR := app
 LAMBDA_DIR := lambdas
 VENV    := $(CURDIR)/$(APP_DIR)/.venv
-PY      := $(VENV)/bin/python
-PIP     := $(VENV)/bin/pip
-RUFF    := $(VENV)/bin/ruff
+# bin/ on macOS and Linux, Scripts/ on Windows — where a virtualenv puts its
+# interpreter. $(OS) is Windows_NT on every Windows host and unset elsewhere,
+# and is the one signal make has without spawning a shell. lib/common.sh's
+# venv_bin() makes the same call for the scripts.
+VENV_BIN := $(if $(filter Windows_NT,$(OS)),Scripts,bin)
+PY      := $(VENV)/$(VENV_BIN)/python
+PIP     := $(VENV)/$(VENV_BIN)/pip
+RUFF    := $(VENV)/$(VENV_BIN)/ruff
 export AWS_REGION AWS_ACCOUNT_ID
 
-$(VENV)/bin/python:
+$(VENV)/$(VENV_BIN)/python:
 	@./scripts/create-venv.sh
 
 # Every target here is phony — it names an action, not a file it produces.
@@ -91,9 +96,9 @@ verify-aws: ## Confirm the AWS session, account and region
 # ---------------------------------------------------------------------------
 
 .PHONY: venv
-venv: $(VENV)/bin/python ## Create the virtualenv on the pinned interpreter
+venv: $(VENV)/$(VENV_BIN)/python ## Create the virtualenv on the pinned interpreter
 
-$(VENV)/.deps-stamp: $(APP_DIR)/requirements-dev.txt | $(VENV)/bin/python
+$(VENV)/.deps-stamp: $(APP_DIR)/requirements-dev.txt | $(VENV)/$(VENV_BIN)/python
 	@$(PIP) install --require-hashes --quiet -r $(APP_DIR)/requirements-dev.txt
 	@touch $@
 

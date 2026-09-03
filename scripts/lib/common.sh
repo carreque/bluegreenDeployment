@@ -111,6 +111,19 @@ temp_file() {
   mktemp "${TMPDIR:-/tmp}/$1.XXXXXX"
 }
 
+# venv_bin — the directory a virtualenv puts its interpreter and scripts in.
+#
+# POSIX venvs use bin/; Windows venvs use Scripts/. Asked of the platform
+# rather than probed on disk, so the answer is right before the virtualenv
+# exists — which is when create-venv.sh needs it. The makefile makes the same
+# decision from $(OS), the only signal make has without spawning a shell.
+venv_bin() {
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) echo Scripts ;;
+    *) echo bin ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Phase 2 — image build identity
 # ---------------------------------------------------------------------------
