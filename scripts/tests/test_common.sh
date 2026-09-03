@@ -197,4 +197,21 @@ check_contains "…carrying the new value" "foundation" "$(cat "$FAKE_AWS_LOG")"
 rm -f "$FAKE_AWS_LOG"
 unset FAKE_AWS_LOG
 
+# --- temp_file ---------------------------------------------------------------
+#
+# The one mktemp idiom both flavours accept is an explicit template ending in
+# XXXXXX. `mktemp -t PREFIX` is BSD-only: GNU coreutils reads the argument as
+# a template and fails with "too few X's". verify-network.sh carried that form
+# and worked only because it had only ever run on macOS.
+
+run_capture temp_file bgd-probe
+check "temp_file creates a file"             "0" "$STATUS"
+check "…that exists"                         "yes" "$([[ -f "$OUTPUT" ]] && echo yes || echo no)"
+check "…named from the prefix"               "yes" "$([[ "$(basename "$OUTPUT")" == bgd-probe.* ]] && echo yes || echo no)"
+check "…with a random suffix, not literal Xs" "no" "$([[ "$OUTPUT" == *XXXXXX ]] && echo yes || echo no)"
+rm -f "$OUTPUT"
+
+run_capture temp_file
+check "temp_file needs a prefix" "1" "$STATUS"
+
 report

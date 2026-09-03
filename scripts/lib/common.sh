@@ -99,6 +99,18 @@ version_gte() {
   [[ "$lowest" == "$want" ]]
 }
 
+# temp_file <prefix> — a fresh temporary file, on either mktemp.
+#
+# The one form both flavours accept is an explicit template ending in XXXXXX.
+# `mktemp -t PREFIX` is BSD-only: GNU coreutils reads the argument as the
+# template itself and fails with "too few X's". verify-network.sh carried that
+# form from Phase 4 until 2026-09-03 and only ever ran on macOS, so nothing
+# noticed — it would have failed on the first Linux machine to try it.
+temp_file() {
+  [[ -n "${1:-}" ]] || die "temp_file needs a prefix"
+  mktemp "${TMPDIR:-/tmp}/$1.XXXXXX"
+}
+
 # ---------------------------------------------------------------------------
 # Phase 2 — image build identity
 # ---------------------------------------------------------------------------
