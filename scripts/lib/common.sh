@@ -6,6 +6,36 @@
 
 set -euo pipefail
 
+# Paths that must reach their destination untranslated.
+#
+# Git Bash on Windows rewrites any argument that looks like an absolute POSIX
+# path into a Windows one before a native program sees it: `/infra` becomes
+# `C:/Program Files/Git/infra`. That is right for a host path and wrong for
+# every path here that is not one — a directory inside a container, an SSM
+# parameter name, a variable a container reads. Found 2026-09-03, and the
+# first case was the worst kind: checkov was handed `--directory /infra`,
+# found no such directory, scanned nothing, exited 0, and lint-infra.sh
+# printed "checkov clean". tflint's aws ruleset, both SSM image_tag writes
+# and the AMI lookup all failed the visible way.
+#
+# This variable is Git Bash's own mechanism: arguments beginning with a listed
+# prefix are passed through as written. It is read by nothing on macOS or
+# Linux, where the shell never translated anything, so setting it here costs
+# those platforms nothing. Not `*`: that also stops translating host paths
+# like the `/tmp/…` this repository hands to curl, which then fails to write.
+#
+# Every container-side or API-side absolute path in scripts/ starts with one
+# of these. A script that introduces another adds it here — one list, not a
+# workaround per call site.
+#
+#   /infra /plugins /data   tflint and checkov mounts, lint-infra.sh
+#   /work                   syft and skopeo mounts, generate-sbom.sh and push-image.sh
+#   /src                    the pipeline's build container, pipeline-app-build.sh
+#   /bgd                    every SSM parameter this project owns
+#   /aws                    the public AMI parameter, verify-network.sh
+#   TFLINT_PLUGIN_DIR=      the VAR=/path form, which a bare prefix does not match
+export MSYS2_ARG_CONV_EXCL='/infra;/plugins;/data;/work;/src;/bgd;/aws;TFLINT_PLUGIN_DIR='
+
 # Colour only when stdout is a terminal, so piped and CodeBuild output stay clean.
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
