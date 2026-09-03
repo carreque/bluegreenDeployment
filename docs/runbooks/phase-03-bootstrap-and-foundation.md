@@ -46,7 +46,7 @@ because a `-dirty` tag names something that is not any commit.
 make plan-bootstrap
 ```
 
-Expected: **8 resources to add, 0 to change, 0 to destroy** — the bucket, plus
+Expected: **7 resources to add, 0 to change, 0 to destroy** — the bucket, plus
 versioning, encryption, public access block, ownership controls, lifecycle
 configuration and the TLS-only bucket policy.
 
