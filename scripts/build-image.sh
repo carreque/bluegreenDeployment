@@ -62,7 +62,12 @@ docker buildx build \
   --output "type=docker,name=$IMAGE_REF" \
   "$APP"
 
-DIGEST="$(tar -xOf "$DIST/image.oci.tar" index.json | jq -r '.manifests[0].digest')"
+# From inside $DIST, by a relative name. GNU tar reads a colon in an archive
+# path as host:file and tries to reach that host — so an absolute Windows
+# path like C:/… fails with "Cannot connect to C: resolve failed". The GNU
+# answer is --force-local, but bsdtar on macOS has no such flag; a relative
+# path has no colon to misread and needs nothing from either tar.
+DIGEST="$(cd "$DIST" && tar -xOf image.oci.tar index.json | jq -r '.manifests[0].digest')"
 
 # The build ran --no-cache, so what BuildKit just cached will never be read,
 # and this build has just orphaned the previous one's image layers.
