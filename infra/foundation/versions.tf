@@ -12,7 +12,7 @@ terraform {
     # mock_provider "aws" does not touch a different provider — so the archive
     # is really built during terraform test, which is what proves the
     # collector's packaging works offline rather than mocking it away.
-    # Declared here, matching infra/environments/prod/versions.tf, so the lock
+    # Declared here, matching infra/versions.tf, so the lock
     # file records the resolution rather than leaving it to the implicit
     # dependency Terraform would otherwise infer from the child module — which
     # would leave this layer's .terraform.lock.hcl changed-but-uncommitted and

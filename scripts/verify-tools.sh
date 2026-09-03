@@ -107,7 +107,7 @@ check_pin() {
 # interpreter altogether. What must be right now is the virtualenv every make
 # target invokes by absolute path.
 check_venv_pin() {
-  local pinned actual venv="$ROOT/app/.venv/bin/python"
+  local pinned actual venv="$ROOT/app/.venv/$(venv_bin)/python"
   pinned="$(tr -d '[:space:]' <"$ROOT/.python-version")"
 
   if [[ ! -x "$venv" ]]; then

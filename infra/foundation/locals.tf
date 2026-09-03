@@ -132,7 +132,7 @@ locals {
 
 locals {
   # Production is addressed BY NAME, never through remote state, and that is
-  # forced rather than chosen. infra/environments/prod already reads this
+  # forced rather than chosen. infra/ (enable_prod = true) already reads this
   # layer's state; reading prod's back would make each layer depend on the
   # other — and Terraform would not report it as a cycle, because the two are
   # separate state files read at plan time. The symptom would be this layer's
@@ -141,7 +141,7 @@ locals {
   #
   # Every segment below is this layer's own convention variables. The two names
   # that cross the boundary are pinned as string literals by
-  # infra/environments/prod/tests/outputs.tftest.hcl, so a rename over there
+  # infra/tests/prod_outputs.tftest.hcl, so a rename over there
   # fails there rather than silently orphaning the rule over here.
   observability = {
     collector_name = "${local.name_prefix}-release-metrics"

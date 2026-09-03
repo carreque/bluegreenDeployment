@@ -1,7 +1,7 @@
 # Runbook — Phase 5: staging apply, verification and teardown
 
 **Date:** 2026-08-28
-**Layer:** `infra/environments/staging`
+**Layer:** `infra/ (enable_prod = false)`
 **Estimated time:** 20–30 minutes for the apply-verify-teardown cycle, most of
 it the ALB provisioning and the ECS service reaching steady state
 **Cost while it exists:** roadmap §3 estimates ~$25/month — the ALB is most of
@@ -105,8 +105,8 @@ wants. `image_tag` deliberately does not: the correct value changes with
 every build, and a stale default would silently deploy an old image.
 
 ```bash
-cp infra/environments/staging/terraform.tfvars.example \
-   infra/environments/staging/terraform.tfvars
+cp infra/terraform.tfvars.example \
+   infra/terraform.tfvars
 ```
 
 Then edit `terraform.tfvars` and set `image_tag` to the tag chosen in step 1
@@ -223,7 +223,7 @@ Expected:
 `/version`'s `image_digest` must equal:
 
 ```bash
-terraform -chdir=infra/environments/staging output -raw image_digest
+terraform -chdir=infra/ (enable_prod = false) output -raw image_digest
 ```
 
 If they differ, the ALB is serving a task that predates this apply — usually
@@ -274,7 +274,7 @@ list call and returns `422` without it.
 
 **Report back whether the `POST /api/transactions` call succeeded, and treat
 that answer as significant.** The task-role policy in
-`infra/environments/staging/iam.tf` grants `dynamodb:UpdateItem` and
+`infra/iam.tf` grants `dynamodb:UpdateItem` and
 `dynamodb:TransactWriteItems` **together**, as one set, for the compound
 `transact_write_items` call `post_transaction` makes. A successful POST here
 proves that granted set is sufficient — and specifically proves

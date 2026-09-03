@@ -28,7 +28,7 @@
 
 # The mocks below exist because of `command = apply`, and each was added
 # because omitting it produced a hard error rather than because it looked tidy
-# — the same rule infra/environments/prod/tests/compute.tftest.hcl follows.
+# — the same rule infra/tests/prod_compute.tftest.hcl follows.
 #
 #   aws_acm_certificate      domain_validation_options mocks to an empty set,
 #                            and acm.tf's one([...]) over it then yields null
@@ -50,28 +50,7 @@
 # three distinct generated ARNs is what makes the RunTheBuilds assertion notice
 # a missing one.
 mock_provider "aws" {
-  mock_resource "aws_acm_certificate" {
-    defaults = {
-      domain_validation_options = [
-        {
-          domain_name           = "api.carloscloudengineer.com"
-          resource_record_name  = "_mock.api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-        {
-          domain_name           = "staging-api.carloscloudengineer.com"
-          resource_record_name  = "_mock.staging-api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-      ]
-    }
-  }
-
-  mock_resource "aws_sns_topic" {
-    defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
-  }
+  source = "./tests/mocks"
 }
 
 override_resource {

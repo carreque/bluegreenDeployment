@@ -5,7 +5,7 @@
 # deliberate and it is why it has no test suite of its own — the calling layer's
 # assertions on three real instantiations cover everything it does, and a suite
 # over a module with no branches asserts that Terraform works. See
-# infra/environments/prod/tests/bluegreen.tftest.hcl.
+# infra/tests/prod_bluegreen.tftest.hcl.
 
 # Built during terraform plan and terraform test alike. archive is a different
 # provider from aws, so mock_provider "aws" does not touch it and the zip is

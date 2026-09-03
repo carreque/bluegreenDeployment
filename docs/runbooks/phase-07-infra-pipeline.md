@@ -168,7 +168,7 @@ aws ecs describe-services --cluster bgd-us-east-1-prod \
   --query 'services[0].taskDefinition' --output text | tee /tmp/prod-taskdef-before.txt
 ```
 
-Make a genuinely trivial, honest change under `infra/environments/staging/` — a
+Make a genuinely trivial, honest change under `infra/` — a
 comment, or `log_retention_days` from 14 to 15. Not a behaviour change, and not
 something that only *looks* like a change: the point is to watch a real plan
 reach a real approval.

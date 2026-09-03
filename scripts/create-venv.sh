@@ -13,6 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 ROOT="$(repo_root)"
 VENV="$ROOT/app/.venv"
+VENV_BIN="$VENV/$(venv_bin)"
 PIN="$(tr -d '[:space:]' <"$ROOT/.python-version")"
 
 # Ordered by how much they depend on the environment being set up correctly.
@@ -57,13 +58,13 @@ find_interpreter() {
 # identically on 25.x, and CI never compiles a lock.
 PIP_CONSTRAINT_FOR_PIP_TOOLS="pip<26"
 
-if [[ -x "$VENV/bin/python" ]]; then
-  found="$(extract_version "$("$VENV/bin/python" --version 2>&1)")"
+if [[ -x "$VENV_BIN/python" ]]; then
+  found="$(extract_version "$("$VENV_BIN/python" --version 2>&1)")"
   if [[ "$found" == "$PIN" ]]; then
     # Still enforce the pip bound: an existing virtualenv may predate it, or
     # have been upgraded past it by hand.
-    "$VENV/bin/python" -m pip install --quiet --upgrade "$PIP_CONSTRAINT_FOR_PIP_TOOLS"
-    ok "virtualenv already on $PIN — pip $("$VENV/bin/pip" --version | awk '{print $2}')"
+    "$VENV_BIN/python" -m pip install --quiet --upgrade "$PIP_CONSTRAINT_FOR_PIP_TOOLS"
+    ok "virtualenv already on $PIN — pip $("$VENV_BIN/pip" --version | awk '{print $2}')"
     exit 0
   fi
   warn "virtualenv is on $found but the pin is $PIN — recreating"
@@ -75,5 +76,5 @@ interpreter="$(find_interpreter)" ||
 
 info "creating $VENV on $interpreter"
 "$interpreter" -m venv "$VENV"
-"$VENV/bin/python" -m pip install --quiet --upgrade "$PIP_CONSTRAINT_FOR_PIP_TOOLS"
-ok "virtualenv ready — $("$VENV/bin/python" --version)"
+"$VENV_BIN/python" -m pip install --quiet --upgrade "$PIP_CONSTRAINT_FOR_PIP_TOOLS"
+ok "virtualenv ready — $("$VENV_BIN/python" --version)"

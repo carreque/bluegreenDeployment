@@ -6,6 +6,36 @@
 
 set -euo pipefail
 
+# Paths that must reach their destination untranslated.
+#
+# Git Bash on Windows rewrites any argument that looks like an absolute POSIX
+# path into a Windows one before a native program sees it: `/infra` becomes
+# `C:/Program Files/Git/infra`. That is right for a host path and wrong for
+# every path here that is not one — a directory inside a container, an SSM
+# parameter name, a variable a container reads. Found 2026-09-03, and the
+# first case was the worst kind: checkov was handed `--directory /infra`,
+# found no such directory, scanned nothing, exited 0, and lint-infra.sh
+# printed "checkov clean". tflint's aws ruleset, both SSM image_tag writes
+# and the AMI lookup all failed the visible way.
+#
+# This variable is Git Bash's own mechanism: arguments beginning with a listed
+# prefix are passed through as written. It is read by nothing on macOS or
+# Linux, where the shell never translated anything, so setting it here costs
+# those platforms nothing. Not `*`: that also stops translating host paths
+# like the `/tmp/…` this repository hands to curl, which then fails to write.
+#
+# Every container-side or API-side absolute path in scripts/ starts with one
+# of these. A script that introduces another adds it here — one list, not a
+# workaround per call site.
+#
+#   /infra /plugins /data   tflint and checkov mounts, lint-infra.sh
+#   /work                   syft and skopeo mounts, generate-sbom.sh and push-image.sh
+#   /src                    the pipeline's build container, pipeline-app-build.sh
+#   /bgd                    every SSM parameter this project owns
+#   /aws                    the public AMI parameter, verify-network.sh
+#   TFLINT_PLUGIN_DIR=      the VAR=/path form, which a bare prefix does not match
+export MSYS2_ARG_CONV_EXCL='/infra;/plugins;/data;/work;/src;/bgd;/aws;TFLINT_PLUGIN_DIR='
+
 # Colour only when stdout is a terminal, so piped and CodeBuild output stay clean.
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -97,6 +127,31 @@ version_gte() {
   lowest="$(printf '%s\n%s\n' "$have" "$want" |
     sort -t. -k1,1n -k2,2n -k3,3n | head -1)"
   [[ "$lowest" == "$want" ]]
+}
+
+# temp_file <prefix> — a fresh temporary file, on either mktemp.
+#
+# The one form both flavours accept is an explicit template ending in XXXXXX.
+# `mktemp -t PREFIX` is BSD-only: GNU coreutils reads the argument as the
+# template itself and fails with "too few X's". verify-network.sh carried that
+# form from Phase 4 until 2026-09-03 and only ever ran on macOS, so nothing
+# noticed — it would have failed on the first Linux machine to try it.
+temp_file() {
+  [[ -n "${1:-}" ]] || die "temp_file needs a prefix"
+  mktemp "${TMPDIR:-/tmp}/$1.XXXXXX"
+}
+
+# venv_bin — the directory a virtualenv puts its interpreter and scripts in.
+#
+# POSIX venvs use bin/; Windows venvs use Scripts/. Asked of the platform
+# rather than probed on disk, so the answer is right before the virtualenv
+# exists — which is when create-venv.sh needs it. The makefile makes the same
+# decision from $(OS), the only signal make has without spawning a shell.
+venv_bin() {
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) echo Scripts ;;
+    *) echo bin ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -262,6 +317,11 @@ plan_summary() {
 
 # layer_dir <layer> — absolute path to a layer's root module.
 #
+# NOTE, 2026-09-02: staging and prod now BOTH return $root/infra. The two
+# environment directories were merged into one root module driven by
+# environments/<env>.tfvars, so a layer name no longer identifies a directory on
+# its own — see layer_var_file and layer_backend_config below.
+#
 # The map that tf.sh, teardown.sh and lint-infra.sh each carried a copy of, and
 # that rebuild.sh would have been the fourth to copy. tf.sh's own comment asked
 # for this. Plan §D13.
@@ -279,9 +339,114 @@ layer_dir() {
   root="$(repo_root)"
   case "$1" in
     bootstrap | foundation | network) printf '%s/infra/%s\n' "$root" "$1" ;;
-    staging | prod) printf '%s/infra/environments/%s\n' "$root" "$1" ;;
+    staging | prod) printf '%s/infra\n' "$root" ;;
     *) die "unknown layer: $1 (expected bootstrap, foundation, network, staging or prod)" ;;
   esac
+}
+
+# staging and prod share a directory, which is the whole of the environments
+# merge. What still separates them is a var file and a backend key, and the two
+# helpers below are the other half of a layer's identity.
+#
+# They are SEPARATE functions rather than one returning both, because they are
+# consumed at different moments: the backend config goes to `terraform init` and
+# the var file to plan/apply, and `terraform apply <planfile>` takes the first
+# and REJECTS the second — a saved plan already carries the values it was made
+# with. tf.sh is what knows which moment it is in.
+#
+# Both print nothing for the three single-environment layers, whose backend
+# blocks are still literal and which have no environment to select. Callers
+# treat empty as "pass no flag" rather than as an error, which is what lets
+# tf.sh stay one code path for all five layers.
+
+# layer_var_file <layer> — absolute path to a layer's committed .tfvars, or empty.
+layer_var_file() {
+  local root
+  root="$(repo_root)"
+  case "$1" in
+    staging | prod) printf '%s/infra/environments/%s.tfvars\n' "$root" "$1" ;;
+    bootstrap | foundation | network) printf '' ;;
+    *) die "unknown layer: $1 (expected bootstrap, foundation, network, staging or prod)" ;;
+  esac
+}
+
+# layer_backend_config <layer> — absolute path to a layer's backend .hcl, or empty.
+#
+# This is what replaces the literal `key = "prod/terraform.tfstate"` that used to
+# sit in a per-environment versions.tf. The pairing of this file with the var
+# file above is the guarantee the literal block used to give for free, and it is
+# why both are derived HERE from one layer name rather than typed by a caller:
+# initialising prod's backend and then applying staging's variables is a valid
+# sequence of commands and a catastrophic one.
+layer_backend_config() {
+  local root
+  root="$(repo_root)"
+  case "$1" in
+    staging | prod) printf '%s/infra/environments/%s.backend.hcl\n' "$root" "$1" ;;
+    bootstrap | foundation | network) printf '' ;;
+    *) die "unknown layer: $1 (expected bootstrap, foundation, network, staging or prod)" ;;
+  esac
+}
+
+# layer_init_backend <layer> — initialise a layer's REAL backend, quietly.
+#
+# For the callers that run `terraform output` or `terraform state list` directly
+# rather than through tf.sh — smoke.sh and teardown.sh both do, deliberately,
+# because they read state rather than running a Terraform command against a
+# layer.
+#
+# Since the environments merge this is no longer optional for them. infra/ holds
+# ONE .terraform directory and it remembers whichever environment's backend was
+# initialised last, so reading an output without this first returns the OTHER
+# environment's values — silently, with nothing on any stream to notice. A smoke
+# test that read production's URL while claiming to test staging would pass, and
+# be meaningless.
+#
+# Prints nothing on success. Failures are the caller's to interpret: teardown
+# tolerates them (a layer that was never applied has no backend to read), and
+# smoke turns them into a message naming the override to set instead.
+layer_init_backend() {
+  local dir backend_config args=()
+  dir="$(layer_dir "$1")" || return 1
+  backend_config="$(layer_backend_config "$1")" || return 1
+  [[ -n "$backend_config" ]] && args=(-reconfigure -backend-config="$backend_config")
+  terraform -chdir="$dir" init -input=false ${args[@]+"${args[@]}"} >/dev/null
+}
+
+# layer_dir_rel <layer> — a layer's root module, relative to the repository root.
+#
+# layer_dir's answer with the root stripped, so the two can never disagree about
+# where a layer lives. Both pipeline scripts want this shape rather than the
+# absolute one, for two reasons that happen to point the same way: the path is
+# printed in operator-facing messages ("no saved plan at
+# infra/pipeline.tfplan — the Plan action in this stage must
+# run first"), where an absolute path would name a CodeBuild container's scratch
+# directory rather than something the reader can act on; and it is compared
+# against "$ROOT/$dir", which wants the tail.
+#
+# Added on 2026-09-02, when the map turned out to have SIX open-coded copies
+# rather than the three Phase 10 §D13 set out to remove. Two are byte-identical
+# case blocks 57 lines apart in pipeline-terraform.sh; three more are in
+# pipeline-deploy.sh, whose own header comment claimed "the
+# layer-name-to-directory map appears here nowhere". Phase 10 converted tf.sh
+# and teardown.sh and stopped there, because the remaining callers wanted a
+# relative path and layer_dir only offered an absolute one — so they kept their
+# copies. This closes that gap rather than widening the map's blast radius a
+# seventh time.
+#
+# lint-infra.sh's layer_path stays its own function, for the reason recorded
+# above: it returns a path relative to infra/ rather than to the root, and has
+# to pass an already-relative path through unchanged. A different contract.
+#
+# The `|| return 1` is load-bearing. layer_dir die()s on an unknown layer, and
+# die() exits the subshell this command substitution runs in — so without it the
+# non-zero status would be discarded and the caller handed an empty path, which
+# under -chdir means "the current directory" and would plan the wrong layer.
+layer_dir_rel() {
+  local root dir
+  root="$(repo_root)"
+  dir="$(layer_dir "$1")" || return 1
+  printf '%s\n' "${dir#"$root"/}"
 }
 
 # The four values /bgd/platform/deployed_scope holds, ranked. The SAME four

@@ -28,28 +28,7 @@
 # is exactly what D6's structural separation exists to prevent, so the test
 # must be able to see it.
 mock_provider "aws" {
-  mock_resource "aws_acm_certificate" {
-    defaults = {
-      domain_validation_options = [
-        {
-          domain_name           = "api.carloscloudengineer.com"
-          resource_record_name  = "_mock.api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-        {
-          domain_name           = "staging-api.carloscloudengineer.com"
-          resource_record_name  = "_mock.staging-api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-      ]
-    }
-  }
-
-  mock_resource "aws_sns_topic" {
-    defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
-  }
+  source = "./tests/mocks"
 }
 
 # One override per role, never one mock_resource default for the type:
@@ -632,7 +611,7 @@ run "the_infra_trigger_narrowed_when_the_app_buildspecs_arrived" {
       "lambdas/**",
       "scripts/lint-infra.sh",
     ])
-    error_message = "tf.sh and lib/common.sh join the list here rather than as a consequence of this phase: every plan and every apply in that pipeline runs both, so by Phase 7's own D12 argument they are its executable content and always were (F4). lambdas/** joins in Phase 9 but closes a Phase 6 gap, not a Phase 8 or 9 one: infra/environments/prod/hooks.tf has packaged lambdas/lifecycle_hook/handler.py since Phase 6 (Phase 9 §D18). scripts/lint-infra.sh joins on 2026-08-31 for the same D12 reason: every Validate stage runs it."
+    error_message = "tf.sh and lib/common.sh join the list here rather than as a consequence of this phase: every plan and every apply in that pipeline runs both, so by Phase 7's own D12 argument they are its executable content and always were (F4). lambdas/** joins in Phase 9 but closes a Phase 6 gap, not a Phase 8 or 9 one: infra/hooks.tf has packaged lambdas/lifecycle_hook/handler.py since Phase 6 (Phase 9 §D18). scripts/lint-infra.sh joins on 2026-08-31 for the same D12 reason: every Validate stage runs it."
   }
 }
 

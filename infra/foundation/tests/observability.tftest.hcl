@@ -12,28 +12,7 @@
 # lambdas/release_metrics/handler.py — a wrong source_file fails here rather
 # than at the first invocation. Phase 6 §F4, reused; plan §F12.
 mock_provider "aws" {
-  mock_resource "aws_acm_certificate" {
-    defaults = {
-      domain_validation_options = [
-        {
-          domain_name           = "api.carloscloudengineer.com"
-          resource_record_name  = "_mock.api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-        {
-          domain_name           = "staging-api.carloscloudengineer.com"
-          resource_record_name  = "_mock.staging-api.carloscloudengineer.com."
-          resource_record_type  = "CNAME"
-          resource_record_value = "_mock.acm-validations.aws."
-        },
-      ]
-    }
-  }
-
-  mock_resource "aws_sns_topic" {
-    defaults = { arn = "arn:aws:sns:us-east-1:590184028094:bgd-us-east-1-alerts" }
-  }
+  source = "./tests/mocks"
 }
 
 # command = apply plans and applies the WHOLE root module, not just the
@@ -314,7 +293,7 @@ run "the_collector_is_watched_by_something_that_is_not_the_collector" {
 
 # Every name Task 11's runbook and any later document depend on by string,
 # pinned here, so a rename fails in this layer rather than as a null lookup
-# three documents later — the same reason infra/environments/prod/tests/
+# three documents later — the same reason infra/tests/
 # outputs.tftest.hcl pins hook_function_names and bake_alarm_names.
 run "the_outputs_the_runbook_and_later_documents_consume_are_present" {
   command = apply

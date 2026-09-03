@@ -6,7 +6,7 @@ dependency lock, one test suite — and these are neither built into that image
 nor deployed with it.
 
 Packaged and deployed by [`infra/modules/lambda`](../infra/modules/lambda), and
-instantiated by [`infra/environments/prod/hooks.tf`](../infra/environments/prod/hooks.tf).
+instantiated by [`infra/hooks.tf`](../infra/hooks.tf).
 
 | Package | Phase | What it is |
 |---|---|---|

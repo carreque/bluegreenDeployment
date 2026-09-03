@@ -12,7 +12,7 @@
 # Plan §F3.
 #
 # Policies are built with jsonencode rather than aws_iam_policy_document, the
-# same rule infra/environments/prod/iam.tf follows and for the same reason:
+# same rule infra/iam.tf follows and for the same reason:
 # mock_provider mocks every data source the AWS provider owns, the policy
 # document generator among them despite being a pure local computation. Under
 # test it returns a random string, so a policy built through it asserts nothing

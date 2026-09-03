@@ -41,12 +41,17 @@ AWS_ACCOUNT_ID := 590184028094
 APP_DIR := app
 LAMBDA_DIR := lambdas
 VENV    := $(CURDIR)/$(APP_DIR)/.venv
-PY      := $(VENV)/bin/python
-PIP     := $(VENV)/bin/pip
-RUFF    := $(VENV)/bin/ruff
+# bin/ on macOS and Linux, Scripts/ on Windows — where a virtualenv puts its
+# interpreter. $(OS) is Windows_NT on every Windows host and unset elsewhere,
+# and is the one signal make has without spawning a shell. lib/common.sh's
+# venv_bin() makes the same call for the scripts.
+VENV_BIN := $(if $(filter Windows_NT,$(OS)),Scripts,bin)
+PY      := $(VENV)/$(VENV_BIN)/python
+PIP     := $(VENV)/$(VENV_BIN)/pip
+RUFF    := $(VENV)/$(VENV_BIN)/ruff
 export AWS_REGION AWS_ACCOUNT_ID
 
-$(VENV)/bin/python:
+$(VENV)/$(VENV_BIN)/python:
 	@./scripts/create-venv.sh
 
 # Every target here is phony — it names an action, not a file it produces.
@@ -91,9 +96,9 @@ verify-aws: ## Confirm the AWS session, account and region
 # ---------------------------------------------------------------------------
 
 .PHONY: venv
-venv: $(VENV)/bin/python ## Create the virtualenv on the pinned interpreter
+venv: $(VENV)/$(VENV_BIN)/python ## Create the virtualenv on the pinned interpreter
 
-$(VENV)/.deps-stamp: $(APP_DIR)/requirements-dev.txt | $(VENV)/bin/python
+$(VENV)/.deps-stamp: $(APP_DIR)/requirements-dev.txt | $(VENV)/$(VENV_BIN)/python
 	@$(PIP) install --require-hashes --quiet -r $(APP_DIR)/requirements-dev.txt
 	@touch $@
 
@@ -192,7 +197,23 @@ run-image: build local-tables ## Run the built image against DynamoDB Local on :
 # place a new layer has to be declared.
 # ---------------------------------------------------------------------------
 
+# The five DEPLOYABLE layers. Each has its own state file and is planned and
+# applied on its own, which is what teardown.sh and rebuild.sh walk.
 TF_LAYERS := bootstrap foundation network staging prod
+
+# The four distinct ROOT MODULES, for the offline gate.
+#
+# staging and prod have been the same directory since the 2026-09-02
+# environments merge — one root module told apart by
+# infra/environments/<env>.tfvars — so validating, linting or testing both names
+# would do the identical work twice. `prod` stands for the pair here; `staging`
+# would resolve to the same directory and mean the same thing.
+#
+# `terraform test` in particular must NOT be run per environment: infra/tests/
+# holds both suites, each setting its own environment and enable_prod in a
+# per-file variables block, so one invocation already runs all 53 assertions.
+# Listing both names would run all 53 twice and prove nothing extra.
+TF_ROOTS := bootstrap foundation network prod
 
 .PHONY: tf-fmt
 tf-fmt: ## Format every Terraform file in place
@@ -207,15 +228,15 @@ tf-fmt-check: ## Fail if any Terraform file is unformatted (no AWS session neede
 
 .PHONY: tf-validate
 tf-validate: ## Validate every Terraform layer (no AWS session needed)
-	@for l in $(TF_LAYERS); do ./scripts/tf.sh validate $$l; done
+	@for l in $(TF_ROOTS); do ./scripts/tf.sh validate $$l; done
 
 .PHONY: tf-test
 tf-test: ## Run the Terraform test suites against mocked providers
-	@for l in $(TF_LAYERS); do ./scripts/tf.sh test $$l; done
+	@for l in $(TF_ROOTS); do ./scripts/tf.sh test $$l; done
 
 .PHONY: tf-lint
 tf-lint: ## Run tflint and checkov from digest-pinned containers
-	@./scripts/lint-infra.sh $(TF_LAYERS)
+	@./scripts/lint-infra.sh $(TF_ROOTS)
 
 .PHONY: tf-check
 tf-check: tf-validate tf-lint tf-test ## The full pre-merge gate for infra/ (no AWS session)

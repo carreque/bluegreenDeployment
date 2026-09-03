@@ -37,15 +37,26 @@ require_cmd aws
 
 ROOT="$(repo_root)"
 
-# Relative to the layer directory, because scripts/tf.sh runs terraform with
-# -chdir. Named to match .gitignore's *.tfplan, so a copy pulled down for
-# debugging cannot be committed.
-PLAN_FILE="pipeline.tfplan"
 VARS_FILE="$ROOT/plan-vars.env"
 
 mode="${1:-}"
 layer="${2:-}"
 [[ -n "$mode" && -n "$layer" ]] || die "usage: pipeline-terraform.sh <plan|apply> <layer>"
+
+# Relative to the layer directory, because scripts/tf.sh runs terraform with
+# -chdir, and named to match .gitignore's *.tfplan so a copy pulled down for
+# debugging cannot be committed.
+#
+# Named for the LAYER rather than just "pipeline" since the environments merge
+# put staging and prod in one directory: both would otherwise write and read
+# infra/pipeline.tfplan, and the second plan would silently overwrite the first.
+# Harmless inside the pipeline, where every action is a fresh container, and a
+# real hazard locally where `make plan-staging` then `make plan-prod` is an
+# ordinary thing to do.
+#
+# Assigned AFTER the argument parsing below, not with the other constants above
+# it, because it now interpolates one of those arguments.
+PLAN_FILE="pipeline-${layer}.tfplan"
 
 # scope_rank and layer_rank moved to lib/common.sh in Phase 10, as
 # platform_scope_rank and platform_layer_rank — rebuild.sh, teardown.sh and
@@ -134,10 +145,7 @@ esac
 # ---------------------------------------------------------------------------
 
 if [[ "$mode" == "apply" ]]; then
-  case "$layer" in
-    foundation | network) dir="infra/$layer" ;;
-    *) dir="infra/environments/$layer" ;;
-  esac
+  dir="$(layer_dir_rel "$layer")"
 
   [[ -f "$ROOT/$dir/$PLAN_FILE" ]] ||
     die "no saved plan at $dir/$PLAN_FILE — the Plan action in this stage must run first"
@@ -191,10 +199,7 @@ status=0
   -out="$PLAN_FILE" \
   ${tf_vars[@]+"${tf_vars[@]}"} || status=$?
 
-case "$layer" in
-  foundation | network) dir="infra/$layer" ;;
-  *) dir="infra/environments/$layer" ;;
-esac
+dir="$(layer_dir_rel "$layer")"
 
 case "$status" in
   0)

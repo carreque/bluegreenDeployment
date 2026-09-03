@@ -591,7 +591,7 @@ Least-privilege roles, separated by function: CodeBuild, CodePipeline, ECS task 
 > needs `lambda:InvokeFunction` on exactly three functions. This section's own
 > stated premise is "least-privilege roles, separated by function", and merging
 > them would give the rule-rewriter permission to invoke arbitrary Lambdas and
-> the invoker permission to rewrite production routing. `infra/environments/prod`
+> the invoker permission to rewrite production routing. `infra/ (enable_prod = true)`
 > creates both, and asserts in a test that they are different roles so a later
 > simplification has to argue with it.
 >

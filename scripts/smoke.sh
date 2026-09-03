@@ -54,8 +54,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 require_cmd curl
 require_cmd jq
 
-ROOT="$(repo_root)"
-
 # terraform is required only where it is actually used, not unconditionally
 # up front like curl and jq. If the caller supplies both BGD_SMOKE_URL and
 # BGD_SMOKE_DIGEST, the block below never invokes terraform at all — and a
@@ -71,8 +69,16 @@ case "$env_name" in
   *) die "usage: smoke.sh <staging|prod>" ;;
 esac
 
-layer_dir="$ROOT/infra/environments/$env_name"
-[[ -d "$layer_dir" ]] || die "layer '$env_name' has no directory yet"
+# layer_dir() rather than the path spelled out, so this cannot drift from
+# tf.sh's idea of where a layer lives. The case above has already rejected
+# anything but staging and prod, so layer_dir's own refusal is unreachable
+# here — it is the shared map that is wanted, not a second gate.
+#
+# Since the environments merge this resolves to infra/ for BOTH environments,
+# which is why the reads below are preceded by layer_init_backend: the directory
+# no longer identifies the state.
+dir="$(layer_dir "$env_name")"
+[[ -d "$dir" ]] || die "layer '$env_name' has no directory yet"
 
 # Read both values from Terraform unless the caller supplied them. terraform
 # output is used directly rather than through tf.sh, matching seed-ecr.sh: this
@@ -80,15 +86,25 @@ layer_dir="$ROOT/infra/environments/$env_name"
 BASE_URL="${BGD_SMOKE_URL:-}"
 EXPECTED_DIGEST="${BGD_SMOKE_DIGEST:-}"
 
+# Both reads come from one environment's state, so the backend is configured
+# once here rather than inside each branch. Skipped entirely when the caller
+# supplied both values — Phase 8's smoke build has no AWS credentials at all and
+# must not be made to need them (plan §D6).
+if [[ -z "$BASE_URL" || -z "$EXPECTED_DIGEST" ]]; then
+  require_cmd terraform
+  layer_init_backend "$env_name" 2>/dev/null ||
+    die "cannot initialise the $env_name backend — check your AWS session, or set BGD_SMOKE_URL and BGD_SMOKE_DIGEST to skip reading state"
+fi
+
 if [[ -z "$BASE_URL" ]]; then
   require_cmd terraform
-  BASE_URL="$(terraform -chdir="$layer_dir" output -raw api_url 2>/dev/null)" ||
+  BASE_URL="$(terraform -chdir="$dir" output -raw api_url 2>/dev/null)" ||
     die "cannot read the $env_name outputs — apply the layer first, or set BGD_SMOKE_URL"
 fi
 
 if [[ -z "$EXPECTED_DIGEST" ]]; then
   require_cmd terraform
-  EXPECTED_DIGEST="$(terraform -chdir="$layer_dir" output -raw image_digest 2>/dev/null)" ||
+  EXPECTED_DIGEST="$(terraform -chdir="$dir" output -raw image_digest 2>/dev/null)" ||
     die "cannot read the $env_name image digest — apply the layer first, or set BGD_SMOKE_DIGEST"
 fi
 
@@ -139,6 +155,50 @@ probe() {
     LAST_BODY=""
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Readiness gate — wait for the environment to answer before judging it.
+#
+# Found 2026-09-03, on the first from-scratch rebuild. prod's apply returned
+# with ECS reporting the service steady; this script ran at once; all six
+# checks failed with the listener's default 503. Nothing was misconfigured:
+# green held two healthy tasks and the production rule already weighted them
+# at 100 — the ALB simply had not finished settling, and the identical checks
+# passed minutes later. Staging never showed it because a rolling deployment
+# reports steady only once its one target group is healthy; a first BLUE_GREEN
+# deployment reports steady before its listener does.
+#
+# So a one-shot check seconds after an apply is a race, and it fails in the
+# same shape as a real blue/green fault. The gate below closes the race without
+# weakening the checks: it polls /health until it answers 200, within a bound,
+# and the six checks then run exactly once, as before. If the bound passes the
+# checks still run — that failure keeps the 503 and body that name its cause,
+# which is what the runbook tells the operator to read.
+#
+# /health rather than /ready: this is asking whether the listener reaches a
+# task at all, not whether the task reaches DynamoDB. The 40-second /ready
+# case below stays where it is.
+# ---------------------------------------------------------------------------
+READY_TIMEOUT="${BGD_SMOKE_READY_TIMEOUT:-120}"
+READY_INTERVAL="${BGD_SMOKE_READY_INTERVAL:-5}"
+
+wait_until_serving() {
+  local started=$SECONDS attempts=0 status
+  while :; do
+    attempts=$((attempts + 1))
+    status="$(curl --silent --max-time 10 --output /dev/null \
+      --write-out '%{http_code}' "$BASE_URL/health" 2>/dev/null)" || status=""
+    if [[ "$status" == "200" ]]; then
+      ((attempts > 1)) && dim "  waited $((SECONDS - started))s for /health ($attempts attempts)"
+      return 0
+    fi
+    ((SECONDS - started >= READY_TIMEOUT)) && return 1
+    sleep "$READY_INTERVAL"
+  done
+}
+
+wait_until_serving ||
+  warn "$env_name is not serving after ${READY_TIMEOUT}s — running the checks anyway, so the failure names its cause"
 
 LAST_BODY=""
 

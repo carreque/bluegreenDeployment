@@ -81,7 +81,7 @@ ami_id="$(aws ssm get-parameter --name "$AMI_PARAM" --query 'Parameter.Value' --
 # The AWS CLI base64-encodes a file:// argument itself, which sidesteps the fact
 # that GNU base64 wraps at 76 columns while BSD base64 does not — a difference
 # that would make this script work on this Mac and fail in CodeBuild.
-user_data_file="$(mktemp -t bgd-nat-probe)"
+user_data_file="$(temp_file bgd-nat-probe)"
 trap 'rm -f "$user_data_file"; cleanup' EXIT
 cat > "$user_data_file" <<'CLOUDINIT'
 #!/bin/bash

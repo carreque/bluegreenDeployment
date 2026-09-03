@@ -1,7 +1,7 @@
 # Apply the plan the approval approved. Not a new one. Plan §D11.
 #
 # The input artifact is the Plan action's output, so the saved plan is already
-# in the workspace at infra/environments/prod/pipeline.tfplan. No -var is
+# in the workspace at infra/pipeline.tfplan. No -var is
 # passed and none may be: `terraform apply <planfile>` rejects variables,
 # because the plan file already contains the values it was made with.
 #

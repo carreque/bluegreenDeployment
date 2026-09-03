@@ -88,7 +88,7 @@ resource "aws_codepipeline" "infra" {
 
             # lambdas/** joins in Phase 9, and — like scripts/tf.sh in Phase 8 —
             # this is a PRE-EXISTING gap rather than a consequence of the phase
-            # that found it. infra/environments/prod/hooks.tf has packaged
+            # that found it. infra/hooks.tf has packaged
             # lambdas/lifecycle_hook/handler.py since Phase 6, and Phase 9's
             # collector is packaged from the same directory. A commit that only
             # fixes a handler changes no watched file, so this pipeline does not

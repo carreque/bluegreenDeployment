@@ -25,19 +25,25 @@ PLUGINS="$INFRA/.tflint.d"
 # names — bootstrap, foundation, network, staging, prod — while the discovery
 # branch below already yields relative paths, so both forms must work.
 #
-# staging and prod live one level deeper, at infra/environments/<layer>. Its
-# absence here was invisible until Phase 5 put a layer below infra/ for the first
-# time: tflint failed with "chdir staging: no such file or directory" the moment
+# staging and prod are BOTH infra/ itself since the 2026-09-02 environments
+# merge — one root module told apart by a var file, not two directories. tflint
+# reads configuration and not variables, so linting that directory once covers
+# both environments, and the makefile's TF_ROOTS lists only one of the two names
+# to avoid linting the same files twice.
+#
+# It was "environments/<layer>" from Phase 5 until the merge. Its absence before
+# that was invisible until Phase 5 put a layer below infra/ for the first time:
+# tflint failed with "chdir staging: no such file or directory" the moment
 # staging entered TF_LAYERS. checkov was never affected — it scans infra/ whole.
 #
-# Phase 10 moved that shared map into lib/common.sh as layer_dir(), and this
+# Phase 10 moved the shared map into lib/common.sh as layer_dir(), and this
 # function is deliberately NOT it: layer_dir returns an ABSOLUTE path, while
 # docker's -w needs one relative to infra/ — and this has to pass an
 # already-relative path through unchanged, because the discovery branch below
 # yields those. Plan §D13 and §F6.
 layer_path() {
   case "$1" in
-    staging | prod) echo "environments/$1" ;;
+    staging | prod) echo "." ;;
     *) echo "$1" ;;
   esac
 }
@@ -217,7 +223,7 @@ failures=0
 # diagnose. See fixIssues.md and
 # docs/phases/phase6/2026-08-31-blue-green-does-not-isolate.md.
 info "listener rules — the colour assignment is left to ECS"
-rules_file="$INFRA/environments/prod/alb.tf"
+rules_file="$INFRA/alb.tf"
 unpinned=()
 
 for rule in production test; do
@@ -232,7 +238,7 @@ for rule in production test; do
 done
 
 if ((${#unpinned[@]} > 0)); then
-  warn "aws_lb_listener_rule.${unpinned[*]} in infra/environments/prod/alb.tf has no lifecycle ignore_changes"
+  warn "aws_lb_listener_rule.${unpinned[*]} in infra/alb.tf has no lifecycle ignore_changes"
   warn "  ECS rewrites these rules during every traffic shift. Without ignore_changes the"
   warn "  next apply reverts them and the two colours stop being separated — silently."
   warn "  See fixIssues.md before removing this."

@@ -332,7 +332,7 @@ CodeConnections authorisation, so both manual steps belong in the same runbook.
 
 > **Amended in Phase 5 (2026-08-28).** The Phase 5 half of the row above is
 > done: `aws_ecs_service.api.propagate_tags = "SERVICE"` in
-> `infra/environments/staging/ecs.tf`, asserted by
+> `infra/ecs.tf`, asserted by
 > `tests/compute.tftest.hcl`'s `the_service_runs_private_tasks_with_attributable_tags`
 > run. `propagate_tags` is `optional` and **not `computed`**, so `terraform
 > plan` cannot confirm it landed on a running task — only the AWS CLI can, and
@@ -352,8 +352,8 @@ CodeConnections authorisation, so both manual steps belong in the same runbook.
 
 > **Amended in Phase 6 (2026-08-29).** The Phase 6 half of the row is now done
 > too: `aws_ecs_service.api.propagate_tags = "SERVICE"` in
-> `infra/environments/prod/ecs.tf`, asserted by the same-named run in
-> `infra/environments/prod/tests/compute.tftest.hcl`. **Both halves of the
+> `infra/ecs.tf`, asserted by the same-named run in
+> `infra/tests/prod_compute.tftest.hcl`. **Both halves of the
 > Phases 5 and 6 row are complete in code; neither is confirmed on a running
 > task until the runbooks are executed**, for the reason the Phase 5 amendment
 > gives — `propagate_tags` is not `computed`, so no plan can show it landed.
@@ -409,7 +409,7 @@ tags on all of the above:
 
 > **Amended in Phase 6 (2026-08-29).** This example predated the layer and
 > listed nine resources; the layer contains rather more. Brought up to what
-> `infra/environments/prod` actually creates — the two extra IAM roles, the
+> `infra/ (enable_prod = true)` actually creates — the two extra IAM roles, the
 > three hook functions and their execution roles, the test listener's rules, the
 > second table, and four alarms rather than one.
 >

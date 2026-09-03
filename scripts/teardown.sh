@@ -119,8 +119,11 @@ for layer in "${TEARDOWN_ORDER[@]}"; do
   # state succeeds and spends half a minute of init doing nothing.
   #
   # The init is -backend=false-free on purpose: reading state needs the real
-  # backend, so this goes through tf.sh's plan/apply init path.
-  terraform -chdir="$dir" init -input=false >/dev/null 2>&1 || true
+  # backend. layer_init_backend rather than a bare init, because staging and
+  # prod share infra/ since the environments merge and a bare init would reuse
+  # whichever backend was configured last — reporting the OTHER environment's
+  # state as this one's, which here means skipping a destroy that was needed.
+  layer_init_backend "$layer" >/dev/null 2>&1 || true
   if [[ -z "$(terraform -chdir="$dir" state list 2>/dev/null)" ]]; then
     info "$layer — state is empty, skipping"
     TIMINGS+=("$layer|skipped (already destroyed)|0")

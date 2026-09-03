@@ -9,6 +9,15 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 source "$HERE/lib.sh"
 source "$ROOT/scripts/lib/common.sh"
 
+# Recomputed through repo_root() now that common.sh is loaded, and not merely
+# tidier: repo_root asks git, which on Windows answers C:/Users/... , while
+# cd+pwd under Git Bash answers /c/Users/... . Every assertion below compares a
+# path this library BUILT from repo_root against one this file spells out, so
+# deriving both the same way is what makes the comparison about the layer map
+# rather than about path syntax. On Linux and macOS the two forms are identical
+# and this line changes nothing.
+ROOT="$(repo_root)"
+
 # --- layer_dir ---------------------------------------------------------------
 #
 # The map lived in three scripts and was about to live in a fourth. tf.sh's own
@@ -17,12 +26,100 @@ source "$ROOT/scripts/lib/common.sh"
 check "layer_dir foundation"   "$ROOT/infra/foundation"           "$(layer_dir foundation)"
 check "layer_dir bootstrap"    "$ROOT/infra/bootstrap"            "$(layer_dir bootstrap)"
 check "layer_dir network"      "$ROOT/infra/network"              "$(layer_dir network)"
-check "layer_dir staging"      "$ROOT/infra/environments/staging" "$(layer_dir staging)"
-check "layer_dir prod"         "$ROOT/infra/environments/prod"    "$(layer_dir prod)"
+
+# Both environments, one directory, since the 2026-09-02 merge. This pair of
+# assertions is the whole contract change: a layer name identified a directory
+# before it and identifies a directory PLUS a var file PLUS a backend key now.
+check "layer_dir staging is the merged root" "$ROOT/infra" "$(layer_dir staging)"
+check "layer_dir prod is the merged root"    "$ROOT/infra" "$(layer_dir prod)"
 
 run_capture layer_dir nonsense
 check          "layer_dir refuses an unknown layer"          "1" "$STATUS"
 check_contains "…and names what it expected"  "expected bootstrap, foundation, network, staging or prod" "$OUTPUT"
+
+# --- layer_dir_rel -----------------------------------------------------------
+#
+# The same map, relative to the repository root. Added because layer_dir's
+# absolute answer was the wrong shape for three callers and they each open-coded
+# the map instead: pipeline-terraform.sh twice (two byte-identical case blocks
+# 57 lines apart) and pipeline-deploy.sh twice more. Those paths are printed in
+# operator-facing messages — "no saved plan at infra/…" — so
+# an absolute path there would name a CodeBuild container's scratch directory
+# rather than a path the reader can act on.
+
+check "layer_dir_rel foundation" "infra/foundation"           "$(layer_dir_rel foundation)"
+check "layer_dir_rel bootstrap"  "infra/bootstrap"            "$(layer_dir_rel bootstrap)"
+check "layer_dir_rel network"    "infra/network"              "$(layer_dir_rel network)"
+check "layer_dir_rel staging"    "infra"                     "$(layer_dir_rel staging)"
+check "layer_dir_rel prod"       "infra"                     "$(layer_dir_rel prod)"
+
+# The refusal has to survive the extra layer of command substitution: layer_dir
+# die()s in a subshell, and a wrapper that swallowed that status would hand the
+# caller an empty path instead of stopping.
+run_capture layer_dir_rel nonsense
+check          "layer_dir_rel refuses an unknown layer"       "1" "$STATUS"
+check_contains "…and names what it expected"  "expected bootstrap, foundation, network, staging or prod" "$OUTPUT"
+
+# Never absolute, and never with a leading slash — the whole reason it exists.
+check_contains "layer_dir_rel is relative" "infra/" "$(layer_dir_rel foundation)"
+run_capture eval '[[ "$(layer_dir_rel prod)" != /* ]]'
+check "layer_dir_rel does not return an absolute path" "0" "$STATUS"
+
+# --- the map has exactly one home --------------------------------------------
+#
+# The regression test for the claim in pipeline-deploy.sh's header, which
+# asserted this property while the file carried three copies of the map. A
+# comment nobody checks is how a property gets lost.
+#
+# lib/common.sh is where the map lives. lint-infra.sh keeps layer_path, a
+# deliberate variant whose contract differs — it returns a path relative to
+# infra/ and passes an already-relative path through unchanged (Phase 10 §F6).
+# Every other script must go through layer_dir or layer_dir_rel.
+offenders="$(grep -rl 'infra/\$\|infra/environments/\$' "$ROOT/scripts" \
+  --exclude-dir=tests --exclude=common.sh --exclude=lint-infra.sh 2>/dev/null || true)"
+check "no script open-codes the layer-to-directory map" "" "${offenders//$ROOT\//}"
+
+# --- the other half of a layer's identity ------------------------------------
+#
+# staging and prod are one directory now, so layer_dir alone can no longer tell
+# an apply which environment it is. These two are what does, and they are
+# checked together with layer_dir because the three must agree: initialising
+# prod's backend and then applying staging's variables is a valid sequence of
+# commands and a catastrophic one, and tf.sh deriving all three from one
+# argument is the only thing preventing it.
+
+check "layer_var_file staging" "$ROOT/infra/environments/staging.tfvars" "$(layer_var_file staging)"
+check "layer_var_file prod"    "$ROOT/infra/environments/prod.tfvars"    "$(layer_var_file prod)"
+
+check "layer_backend_config staging" "$ROOT/infra/environments/staging.backend.hcl" "$(layer_backend_config staging)"
+check "layer_backend_config prod"    "$ROOT/infra/environments/prod.backend.hcl"    "$(layer_backend_config prod)"
+
+# The three single-environment layers keep their literal backend blocks and have
+# no environment to select, so both helpers print nothing. Callers treat empty
+# as "pass no flag" — an error here would make tf.sh need two code paths.
+check "layer_var_file is empty for foundation"       "" "$(layer_var_file foundation)"
+check "layer_var_file is empty for network"          "" "$(layer_var_file network)"
+check "layer_backend_config is empty for bootstrap"  "" "$(layer_backend_config bootstrap)"
+
+run_capture layer_var_file nonsense
+check "layer_var_file refuses an unknown layer" "1" "$STATUS"
+run_capture layer_backend_config nonsense
+check "layer_backend_config refuses an unknown layer" "1" "$STATUS"
+
+# The files the two helpers name must actually be there. A path helper that
+# returns a plausible name for a file nobody created is the failure this whole
+# refactor could most easily introduce, and it would surface as a terraform
+# error several layers away from the cause.
+for _env in staging prod; do
+  check "environments/$_env.tfvars exists"      "yes" "$([[ -f "$(layer_var_file "$_env")" ]] && echo yes || echo no)"
+  check "environments/$_env.backend.hcl exists" "yes" "$([[ -f "$(layer_backend_config "$_env")" ]] && echo yes || echo no)"
+done
+
+# The two backend files must name DIFFERENT state keys. Identical keys would
+# point both environments at one state file, and the first apply of the second
+# environment would plan the destruction of the first.
+check "the two environments use different state keys" "2" \
+  "$(grep -h '^key' "$(layer_backend_config staging)" "$(layer_backend_config prod)" | sort -u | wc -l | tr -d ' ')"
 
 # --- the two rank vocabularies -----------------------------------------------
 #
@@ -99,5 +196,22 @@ check_contains "…and calls put-parameter with it" "put-parameter" "$(cat "$FAK
 check_contains "…carrying the new value" "foundation" "$(cat "$FAKE_AWS_LOG")"
 rm -f "$FAKE_AWS_LOG"
 unset FAKE_AWS_LOG
+
+# --- temp_file ---------------------------------------------------------------
+#
+# The one mktemp idiom both flavours accept is an explicit template ending in
+# XXXXXX. `mktemp -t PREFIX` is BSD-only: GNU coreutils reads the argument as
+# a template and fails with "too few X's". verify-network.sh carried that form
+# and worked only because it had only ever run on macOS.
+
+run_capture temp_file bgd-probe
+check "temp_file creates a file"             "0" "$STATUS"
+check "…that exists"                         "yes" "$([[ -f "$OUTPUT" ]] && echo yes || echo no)"
+check "…named from the prefix"               "yes" "$([[ "$(basename "$OUTPUT")" == bgd-probe.* ]] && echo yes || echo no)"
+check "…with a random suffix, not literal Xs" "no" "$([[ "$OUTPUT" == *XXXXXX ]] && echo yes || echo no)"
+rm -f "$OUTPUT"
+
+run_capture temp_file
+check "temp_file needs a prefix" "1" "$STATUS"
 
 report
