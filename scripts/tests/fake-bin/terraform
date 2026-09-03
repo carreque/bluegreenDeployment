@@ -19,8 +19,11 @@
 # Always exits 0. This fake has no opinion about whether a plan would succeed —
 # it is a record of what tf.sh ASKED for, which is the only thing under test.
 
+# TF_DATA_DIR is recorded ahead of the arguments when tf.sh sets it, and left
+# out when it does not — so a line for the shared data directory reads exactly
+# as it always has, and a line for the offline one says so.
 if [[ -n "${FAKE_TF_LOG:-}" ]]; then
-  printf '%s\n' "$*" >>"$FAKE_TF_LOG"
+  printf '%s\n' "${TF_DATA_DIR:+TF_DATA_DIR=$TF_DATA_DIR }$*" >>"$FAKE_TF_LOG"
 fi
 
 # `terraform version` is probed by require_cmd's callers in some scripts, and a

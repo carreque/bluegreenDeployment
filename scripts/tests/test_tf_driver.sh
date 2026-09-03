@@ -49,6 +49,8 @@ cmd_line() { tail -1 "$LOG"; }
 run_tf plan prod
 check_contains "prod plan inits prod's backend" \
   "-backend-config=$ROOT/infra/environments/prod.backend.hcl" "$(init_line)"
+check "…in the shared data directory, not the offline one" "" \
+  "$(grep -o 'TF_DATA_DIR' "$LOG" || true)"
 check_contains "prod plan passes prod's var file" \
   "-var-file=$ROOT/infra/environments/prod.tfvars" "$(cmd_line)"
 check_contains "…in the merged root module" "-chdir=$ROOT/infra" "$(cmd_line)"
@@ -111,6 +113,13 @@ check_contains "a direct apply passes the var file" \
 for offline in validate test; do
   run_tf "$offline" prod
   check_contains "$offline inits with -backend=false" "-backend=false" "$(init_line)"
+  # In its own data directory, or -backend=false is not enough: that flag
+  # keeps whatever backend .terraform/ already remembers, so a root that was
+  # ever planned against the bucket stays bound to it — and fails to init the
+  # day the bucket is gone. Found 2026-09-03, after a teardown that removed
+  # it; the offline gate had promised to need no bucket at all.
+  check_contains "$offline inits in its own data directory" "TF_DATA_DIR=" "$(init_line)"
+  check_contains "…named for what it is"                     ".terraform-offline" "$(init_line)"
   check "$offline is given no backend config" "" \
     "$(grep -o 'backend-config' "$LOG" || true)"
 done

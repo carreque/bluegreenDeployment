@@ -11,7 +11,16 @@
 # The init mode matters. fmt, validate and test need no AWS session and no state
 # bucket, so they init with -backend=false and work on a machine that has never
 # logged in (Phase 3 §F2). plan, apply and destroy need the real backend.
-# Terraform re-initialises cleanly when switching between the two.
+#
+# The two modes do NOT share a data directory, and until 2026-09-03 they did.
+# -backend=false does not mean "no backend": it means "keep whatever backend
+# .terraform/ already remembers", and then loads it. So once a root had been
+# planned against the bucket, every later validate or test still reached for
+# the bucket — and failed to init the day it was gone, after a teardown.
+# -reconfigure does not help; it also loads the remembered state. The offline
+# mode therefore inits in .terraform-offline/, a directory plan and apply
+# never touch, so it cannot inherit a backend from them. The price is a
+# second provider download per root; TF_PLUGIN_CACHE_DIR would share it.
 #
 # ---------------------------------------------------------------------------
 # Why this script is now the thing that keeps staging and prod apart
@@ -59,7 +68,14 @@ info "terraform $command — $layer"
 # downloaded, which is the one moment formatting is most likely to be needed.
 if [[ "$command" != "fmt" ]]; then
   case "$command" in
-    validate | test) init_args=(-backend=false) ;;
+    validate | test)
+      init_args=(-backend=false)
+      # Exported, not passed: the validate or test below must read the same
+      # data directory this init writes. Absolute, because terraform resolves
+      # a relative TF_DATA_DIR against its -chdir target, and spelling that
+      # out is clearer than relying on it. See the note at the top.
+      export TF_DATA_DIR="$dir/.terraform-offline"
+      ;;
     *)
       init_args=()
 
