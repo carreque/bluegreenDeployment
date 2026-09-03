@@ -1,0 +1,19 @@
+# Line endings are LF everywhere, matching .editorconfig's end_of_line = lf.
+# Without this, Git for Windows' default core.autocrlf=true rewrites files to
+# CRLF on checkout, which breaks the shell scripts, the Dockerfile and the
+# fake-bin test stubs this repo runs on Linux and macOS.
+* text=auto eol=lf
+
+# Binary formats, declared so no future addition is diffed or converted as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
