@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# A fake curl for scripts/smoke.sh, answering the two --write-out shapes it
+# uses and nothing else. Put on PATH by scripts/tests/test_smoke.sh.
+#
+# Every call is counted in FAKE_CURL_COUNT_FILE. Calls up to and including
+# FAKE_CURL_503_UNTIL answer 503 with the ALB's own "no listener rule matched"
+# body — the response a listener gives while its target group is still
+# registering — and every call after that answers as a healthy environment
+# would. FAKE_CURL_503_UNTIL=0 is an environment that was up all along; a very
+# large value is one that never comes up.
+#
+# FAKE_CURL_DIGEST is what /version reports as image_digest.
+
+count_file="${FAKE_CURL_COUNT_FILE:?FAKE_CURL_COUNT_FILE is not set}"
+until_n="${FAKE_CURL_503_UNTIL:-0}"
+digest="${FAKE_CURL_DIGEST:-sha256:0000}"
+
+n=0
+[[ -f "$count_file" ]] && n="$(cat "$count_file")"
+n=$((n + 1))
+printf '%s' "$n" >"$count_file"
+
+# Pick out the URL and the --write-out format; ignore every other flag.
+url="" fmt="" to_null=false
+while (($# > 0)); do
+  case "$1" in
+    --write-out) fmt="$2"; shift ;;
+    --output) [[ "$2" == /dev/null ]] && to_null=true; shift ;;
+    --max-time | --connect-timeout) shift ;;
+    -*) ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
+path="${url#*://*/}"
+path="/${path}"
+[[ "$url" == */ ]] && path="/"
+
+if ((n <= until_n)); then
+  status=503
+  body="no listener rule matched"
+  ctype="text/plain"
+else
+  status=200
+  ctype="application/json"
+  case "$path" in
+    /health) body='{"status":"ok"}' ;;
+    /ready) body='{"status":"ready","checks":{"dynamodb":"ok"}}' ;;
+    /version) body="{\"version\":\"0.1.0\",\"image_digest\":\"$digest\",\"release_color\":\"blue\"}" ;;
+    /) body='<!doctype html>'; ctype="text/html" ;;
+    *) status=404; body="not found" ;;
+  esac
+fi
+
+# Reproduce curl's output for each --write-out shape smoke.sh uses.
+case "$fmt" in
+  *content_type*)
+    [[ "$to_null" == true ]] || printf '%s' "$body"
+    printf '%s %s' "$status" "$ctype"
+    ;;
+  *http_code*)
+    [[ "$to_null" == true ]] || printf '%s' "$body"
+    fmt="${fmt//\\n/$'\n'}"
+    printf '%s' "${fmt//%\{http_code\}/$status}"
+    ;;
+  *)
+    [[ "$to_null" == true ]] || printf '%s' "$body"
+    ;;
+esac
+exit 0
